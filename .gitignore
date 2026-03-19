@@ -1,0 +1,36 @@
+# Dependencies
+node_modules/
+
+# Next.js build output
+.next/
+out/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local databases
+*.db
+*.sqlite
+*.sqlite3
+
+# Generated outputs
+output/
+temp/
+
+# Garmin raw data and ingestion workdirs
+raw/garmin/inbox/*
+raw/garmin/failed/*
+raw/garmin/archive/**
+!raw/garmin/inbox/.gitkeep
+!raw/garmin/failed/.gitkeep
+!raw/garmin/archive/.gitkeep
+
+# Environment and logs
+.env
+.env.*
+*.log
+
+# OS/editor noise
+Thumbs.db
+.DS_Store
