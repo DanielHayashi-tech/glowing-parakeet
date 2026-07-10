@@ -9,6 +9,8 @@ The parsing layer is intentionally reusable so other scripts can import the
 canonical activity, lap, and sample objects for database ingestion.
 """
 
+import argparse
+import json
 import struct
 import sys
 from math import isnan
@@ -636,8 +638,30 @@ def summarize(filepath):
     print("=" * width)
 
 
+def parse_args():
+    parser = argparse.ArgumentParser(description="Summarize or export Garmin FIT files.")
+    parser.add_argument("filepath", help="Path to the .fit file.")
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit canonicalized FIT data as JSON instead of a terminal summary.",
+    )
+    parser.add_argument(
+        "--timezone",
+        default="America/Chicago",
+        help="Timezone used for canonical activity metadata.",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python fit_summary.py <activity.fit>")
-        sys.exit(1)
-    summarize(sys.argv[1])
+    args = parse_args()
+    if args.json:
+        print(
+            json.dumps(
+                canonicalize_fit(args.filepath, athlete_timezone=args.timezone),
+                indent=2,
+            )
+        )
+        sys.exit(0)
+    summarize(args.filepath)

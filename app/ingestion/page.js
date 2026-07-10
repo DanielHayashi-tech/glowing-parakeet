@@ -143,6 +143,7 @@ export default function IngestionPage() {
                 <th>File</th>
                 <th>Detected Activity</th>
                 <th>Warnings</th>
+                <th>JSON</th>
                 <th>Imported At</th>
                 <th>Latest Event</th>
               </tr>
@@ -172,6 +173,14 @@ export default function IngestionPage() {
                       : file.warningMessages?.length
                         ? file.warningMessages.join(" | ")
                         : "-"}
+                  </td>
+                  <td>
+                    <Link
+                      className="button-link"
+                      href={`/api/fit-json?filePath=${encodeURIComponent(file.filePath)}`}
+                    >
+                      Download
+                    </Link>
                   </td>
                   <td>{file.importedAt ?? "-"}</td>
                   <td>
