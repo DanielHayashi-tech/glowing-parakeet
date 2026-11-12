@@ -13,6 +13,7 @@ import {
   getRunningMileageLastTwelveWeeks,
   getTrainingDashboard
 } from "@/lib/data";
+import { getMapConfig } from "@/lib/maps";
 import { formatHours, formatPace, titleizeActivityType } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
@@ -206,7 +207,7 @@ export default function HomePage() {
               </div>
             </div>
             <div className="card viz-card">
-              <LatestRunPanel route={route} />
+              <LatestRunPanel map={getMapConfig()} route={route} />
             </div>
           </section>
         </>

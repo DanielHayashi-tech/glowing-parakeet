@@ -161,7 +161,127 @@ function ProfileChart({
   );
 }
 
-export default function LatestRunPanel({ route }) {
+const MAP_WIDTH = 560;
+const MAP_HEIGHT = 440;
+const MAP_PADDING = 52;
+const MAX_TILE_ZOOM = 18;
+
+// Fit the route inside the frame, then work out which imagery tiles cover it.
+// Points are Web Mercator world coordinates (0..1), the projection tiles use, so
+// the route and the imagery line up exactly.
+function mapGeometry(points, withTiles) {
+  const xs = points.map((point) => point.wx);
+  const ys = points.map((point) => point.wy);
+  const minX = Math.min(...xs);
+  const maxX = Math.max(...xs);
+  const minY = Math.min(...ys);
+  const maxY = Math.max(...ys);
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+
+  const fit = Math.min(
+    (MAP_WIDTH - 2 * MAP_PADDING) / (Math.max(maxX - minX, 1e-9) * 256),
+    (MAP_HEIGHT - 2 * MAP_PADDING) / (Math.max(maxY - minY, 1e-9) * 256)
+  );
+  const zoom = Math.min(Math.max(Math.log2(fit), 2), 18.5);
+  const worldPixels = 256 * 2 ** zoom;
+  const toX = (wx) => MAP_WIDTH / 2 + (wx - centerX) * worldPixels;
+  const toY = (wy) => MAP_HEIGHT / 2 + (wy - centerY) * worldPixels;
+
+  const tiles = [];
+  if (withTiles) {
+    const tileZoom = Math.min(MAX_TILE_ZOOM, Math.ceil(zoom));
+    const count = 2 ** tileZoom;
+    const tileSize = 256 * 2 ** (zoom - tileZoom);
+    const halfWidth = MAP_WIDTH / 2 / worldPixels;
+    const halfHeight = MAP_HEIGHT / 2 / worldPixels;
+    const firstX = Math.max(0, Math.floor((centerX - halfWidth) * count));
+    const lastX = Math.min(count - 1, Math.floor((centerX + halfWidth) * count));
+    const firstY = Math.max(0, Math.floor((centerY - halfHeight) * count));
+    const lastY = Math.min(count - 1, Math.floor((centerY + halfHeight) * count));
+    for (let tileY = firstY; tileY <= lastY; tileY += 1) {
+      for (let tileX = firstX; tileX <= lastX; tileX += 1) {
+        tiles.push({
+          key: `${tileZoom}/${tileX}/${tileY}`,
+          href: `/api/tiles/${tileZoom}/${tileX}/${tileY}`,
+          x: toX(tileX / count),
+          y: toY(tileY / count),
+          size: tileSize
+        });
+      }
+    }
+  }
+  return { toX, toY, tiles };
+}
+
+function RouteMap({ route, hovered, map }) {
+  const { points } = route;
+  const { toX, toY, tiles } = mapGeometry(points, map.enabled);
+  const mx = (point) => toX(point.wx);
+  const my = (point) => toY(point.wy);
+  const routePath = points
+    .map((point, index) => `${index === 0 ? "M" : "L"} ${mx(point).toFixed(1)} ${my(point).toFixed(1)}`)
+    .join(" ");
+  const start = points[0];
+  const finish = points[points.length - 1];
+
+  return (
+    <svg
+      aria-label={`Route of the ${route.dateLabel} run${map.enabled ? " over satellite imagery" : ""}`}
+      className="viz-svg"
+      role="img"
+      viewBox={`0 0 ${MAP_WIDTH} ${MAP_HEIGHT}`}
+    >
+      {tiles.map((tile) => (
+        <image
+          height={tile.size + 0.6}
+          href={tile.href}
+          key={tile.key}
+          onError={(event) => {
+            // No imagery for this tile (outside coverage or provider unreachable): leave the backdrop.
+            event.currentTarget.style.display = "none";
+          }}
+          preserveAspectRatio="none"
+          width={tile.size + 0.6}
+          x={tile.x}
+          y={tile.y}
+        />
+      ))}
+      {tiles.length ? <rect fill="rgba(0, 0, 0, 0.10)" height={MAP_HEIGHT} width={MAP_WIDTH} /> : null}
+
+      {/* white casing keeps the route readable on busy imagery */}
+      <path d={routePath} fill="none" stroke={VIZ.surface} strokeLinecap="round" strokeLinejoin="round" strokeOpacity="0.95" strokeWidth="6" />
+      <path d={routePath} fill="none" stroke={VIZ.accent} strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
+      <circle cx={mx(start)} cy={my(start)} fill={VIZ.surface} r="7.5" />
+      <circle cx={mx(start)} cy={my(start)} fill={VIZ.surface} r="4" stroke={VIZ.ink} strokeWidth="2" />
+      <circle cx={mx(finish)} cy={my(finish)} fill={VIZ.surface} r="7.5" />
+      <circle cx={mx(finish)} cy={my(finish)} fill={VIZ.accent} r="4.5" />
+      {hovered ? (
+        <g>
+          <circle cx={mx(hovered)} cy={my(hovered)} fill={VIZ.surface} r="9" />
+          <circle cx={mx(hovered)} cy={my(hovered)} fill={VIZ.ink} r="5.5" />
+        </g>
+      ) : null}
+
+      {tiles.length ? (
+        <text
+          fill="#ffffff"
+          fontSize="10"
+          paintOrder="stroke"
+          stroke="rgba(0, 0, 0, 0.65)"
+          strokeWidth="3"
+          textAnchor="end"
+          x={MAP_WIDTH - 8}
+          y={MAP_HEIGHT - 8}
+        >
+          {map.attribution}
+        </text>
+      ) : null}
+    </svg>
+  );
+}
+
+export default function LatestRunPanel({ route, map }) {
   const [hover, setHover] = useState(null);
 
   if (!route) {
@@ -175,18 +295,6 @@ export default function LatestRunPanel({ route }) {
   const { points } = route;
   const totalMiles = points[points.length - 1].miles || route.miles;
 
-  const mapSize = 300;
-  const mapPad = 18;
-  const mapWidth = route.aspect * mapSize + mapPad * 2;
-  const mapHeight = route.heightRatio * mapSize + mapPad * 2;
-  const mx = (point) => mapPad + point.x * mapSize;
-  const my = (point) => mapPad + point.y * mapSize;
-
-  const routePath = points
-    .map((point, index) => `${index === 0 ? "M" : "L"} ${mx(point).toFixed(1)} ${my(point).toFixed(1)}`)
-    .join(" ");
-  const start = points[0];
-  const finish = points[points.length - 1];
   const hovered = hover ? points[hover.index] : null;
 
   const renderTooltip = (point) => (
@@ -202,24 +310,9 @@ export default function LatestRunPanel({ route }) {
   return (
     <div className="run-panel">
       <div className="run-map">
-        <svg
-          aria-label={`Route of the ${route.dateLabel} run`}
-          className="viz-svg"
-          role="img"
-          viewBox={`0 0 ${mapWidth.toFixed(0)} ${mapHeight.toFixed(0)}`}
-        >
-          <path d={routePath} fill="none" stroke={VIZ.accent} strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" />
-          <circle cx={mx(start)} cy={my(start)} fill={VIZ.surface} r="7" />
-          <circle cx={mx(start)} cy={my(start)} fill={VIZ.surface} r="4" stroke={VIZ.ink} strokeWidth="2" />
-          <circle cx={mx(finish)} cy={my(finish)} fill={VIZ.surface} r="7" />
-          <circle cx={mx(finish)} cy={my(finish)} fill={VIZ.accent} r="4.5" />
-          {hovered ? (
-            <g>
-              <circle cx={mx(hovered)} cy={my(hovered)} fill={VIZ.surface} r="8" />
-              <circle cx={mx(hovered)} cy={my(hovered)} fill={VIZ.ink} r="5" />
-            </g>
-          ) : null}
-        </svg>
+        <div className="run-map-frame">
+          <RouteMap hovered={hovered} map={map} route={route} />
+        </div>
         <div className="viz-legend" aria-hidden="true">
           <span className="viz-legend-item">
             <svg height="14" width="14">

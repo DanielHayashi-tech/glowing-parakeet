@@ -15,8 +15,8 @@
    files omit it or the importer drops it, then add an elevation profile to the route panel.
 3. **More wellness.** Stress, body battery through the day, and respiration are already stored
    in `wellness_raw`. Pull them out into `wellness_daily` when a chart needs them.
-4. **A real map behind the route.** The route is currently just the line. Map tiles would need
-   an external service, so this is a privacy trade-off to decide on.
+4. **Better imagery for non-US runs.** The default USGS imagery covers the US only. Point `MAP_TILE_URL`
+   at another provider if you run elsewhere, or add automatic fallback.
 5. **Per-activity pages.** Splits, pace and heart-rate profiles for any run, not only the latest.
 6. **Weekly and monthly summaries.** Totals and comparisons beyond the 7-day and 30-day windows.
 7. **Notes.** Free-text comments on an activity, using the existing `annotations` table.
@@ -30,6 +30,8 @@
 - API FIT files have not been compared field by field against manual exports. Third parties
   report that some proprietary fields are stripped.
 - The dashboard is light-theme only.
+- Route imagery is fetched from a third party (USGS by default). Tiles are cached locally and
+  `MAP_TILES=off` disables it. See the README.
 - `DailyDistanceChart` and `PaceTrendChart` duplicate some drawing code with `RecoveryCharts`.
   Worth merging if another chart is added.
 

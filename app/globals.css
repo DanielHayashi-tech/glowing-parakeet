@@ -696,7 +696,7 @@ pre {
 
 .run-panel {
   display: grid;
-  grid-template-columns: minmax(260px, 1fr) 1.5fr;
+  grid-template-columns: minmax(280px, 1.15fr) 1fr;
   gap: 28px;
   align-items: start;
 }
@@ -789,4 +789,11 @@ pre {
   .kpi-row-even {
     grid-template-columns: 1fr;
   }
+}
+
+.run-map-frame {
+  overflow: hidden;
+  border-radius: 14px;
+  background: #e4ddcd;
+  line-height: 0;
 }

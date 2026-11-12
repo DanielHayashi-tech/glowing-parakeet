@@ -64,6 +64,25 @@ Everything runs on your machine. Nothing is sent anywhere except the requests to
    scripts/install_nightly_sync.sh
    ```
 
+## Map Imagery
+
+The latest outdoor run is drawn over satellite imagery. By default this is USGS The National Map
+(US government imagery, public domain, no key; US coverage only). The dashboard's server fetches
+each tile once and caches it in `temp/tiles`, so your browser never contacts the imagery provider.
+
+What the provider can see: which map tiles were requested, which is roughly the area you run in
+(for example around home), from this computer's IP address. Nothing else is sent.
+
+Settings in `.env`, all optional:
+
+```text
+MAP_TILES=off                      # no imagery, the route is drawn on a plain background
+MAP_TILE_URL=https://.../{z}/{x}/{y}.jpg   # any XYZ tile service (Esri, Mapbox, ...)
+MAP_TILE_ATTRIBUTION=Imagery: Example  # shown on the map; match your provider's terms
+```
+
+Outside US coverage the default returns no imagery and the map falls back to the plain background.
+
 ## Daily Use
 
 You should not need to do anything. The nightly job syncs at 00:00 and shows a macOS
