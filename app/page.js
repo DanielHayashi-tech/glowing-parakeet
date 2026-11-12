@@ -3,15 +3,17 @@ import Link from "next/link";
 import DailyDistanceChart from "@/app/DailyDistanceChart";
 import LatestRunPanel from "@/app/LatestRunPanel";
 import PaceTrendChart from "@/app/PaceTrendChart";
+import { SleepChart, TrendChart } from "@/app/RecoveryCharts";
 import RunningTrendPanel from "@/app/RunningTrendPanel";
 import {
   getCurrentWeekCalendar,
   getDashboardSummary,
   getLatestRunRoute,
+  getRecoveryDashboard,
   getRunningMileageLastTwelveWeeks,
   getTrainingDashboard
 } from "@/lib/data";
-import { formatPace, titleizeActivityType } from "@/lib/format";
+import { formatHours, formatPace, titleizeActivityType } from "@/lib/format";
 
 export const dynamic = "force-dynamic";
 
@@ -79,6 +81,7 @@ export default function HomePage() {
   const runningTrend = getRunningMileageLastTwelveWeeks();
   const training = getTrainingDashboard();
   const route = getLatestRunRoute();
+  const recovery = getRecoveryDashboard();
   const runningWeekSummary = summarizeRunningWeek(currentWeek);
   const last7 = training?.last7;
   const prev7 = training?.prev7;
@@ -212,6 +215,93 @@ export default function HomePage() {
           No activities yet. Sync from Garmin on the Ingestion page, then process the staging area.
         </div>
       )}
+
+      {recovery ? (
+        <section className="section">
+          <div className="section-header">
+            <div>
+              <h2>Recovery</h2>
+              <p>Sleep, resting heart rate, and HRV from your watch. Blue is recovery; orange is training.</p>
+            </div>
+          </div>
+          <div className="kpi-row kpi-row-even">
+            <KpiTile
+              delta={
+                recovery.priorSleepHours != null && recovery.latest.sleepHours != null
+                  ? `${signedDelta(recovery.latest.sleepHours, recovery.priorSleepHours, 1, "h")} vs prior 7 nights`
+                  : null
+              }
+              detail={recovery.latest.sleepScore != null ? `Sleep score ${recovery.latest.sleepScore}` : null}
+              label="Last night's sleep"
+              value={formatHours(recovery.latest.sleepHours)}
+            />
+            <KpiTile
+              delta={
+                recovery.priorRestingHr != null && recovery.latest.restingHr != null
+                  ? `${signedDelta(recovery.latest.restingHr, recovery.priorRestingHr, 0, "bpm")} vs prior 7 days`
+                  : null
+              }
+              label="Resting heart rate"
+              unit="bpm"
+              value={recovery.latest.restingHr ?? "--"}
+            />
+            <KpiTile
+              delta={
+                recovery.priorHrv != null && recovery.latest.hrv != null
+                  ? `${signedDelta(recovery.latest.hrv, recovery.priorHrv, 0, "ms")} vs prior 7 days`
+                  : null
+              }
+              detail={
+                recovery.latest.hrvStatus
+                  ? `Garmin status: ${recovery.latest.hrvStatus.toLowerCase()}`
+                  : null
+              }
+              label="HRV, overnight"
+              unit="ms"
+              value={recovery.latest.hrv ?? "--"}
+            />
+            <KpiTile
+              delta={
+                recovery.priorBodyBattery != null && recovery.latest.bodyBatteryAtWake != null
+                  ? `${signedDelta(recovery.latest.bodyBatteryAtWake, recovery.priorBodyBattery, 0, "")} vs prior 7 days`
+                  : null
+              }
+              label="Body battery at wake"
+              value={recovery.latest.bodyBatteryAtWake ?? "--"}
+            />
+          </div>
+
+          <div className="card viz-card viz-stack">
+            <h3 className="viz-title">Sleep per night</h3>
+            <SleepChart days={recovery.days} />
+          </div>
+
+          <div className="viz-grid-2 viz-stack">
+            <div className="card viz-card">
+              <h3 className="viz-title">Resting heart rate (bpm)</h3>
+              <TrendChart
+                days={recovery.days}
+                label="Resting heart rate"
+                unit="bpm"
+                valueKey="restingHr"
+              />
+            </div>
+            <div className="card viz-card">
+              <h3 className="viz-title">HRV, overnight average (ms)</h3>
+              <TrendChart
+                bandHighKey="hrvHigh"
+                bandLowKey="hrvLow"
+                bandNote="Shaded band is the balanced range Garmin calculates for you."
+                days={recovery.days}
+                label="HRV"
+                statusKey="hrvStatus"
+                unit="ms"
+                valueKey="hrv"
+              />
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <section className="section">
         <div className="section-header">

@@ -9,6 +9,10 @@ export const VIZ = {
   accentHover: "#e0642a",
   accentWash: "rgba(200, 76, 9, 0.16)",
   heartRate: "#3366cc",
+  // Orange is training, blue is recovery (sleep, resting HR, HRV). Same blue as heart rate.
+  recovery: "#3366cc",
+  recoveryHover: "#5a82d6",
+  recoveryWash: "rgba(51, 102, 204, 0.14)",
   surface: "#fffaf1",
   grid: "#e6dccb",
   baseline: "#cbbda5",
