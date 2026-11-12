@@ -70,22 +70,6 @@ python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --previ
 python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --archive-root raw/garmin/archive --failed-root raw/garmin/failed --athlete-name "D Hayashi" --timezone America/Chicago
 ```
 
-## Test Cases
-
-Stage inbox test scenarios:
-
-```powershell
-python scripts/stage_ingestion_test_cases.py --case all
-```
-
-Or one at a time:
-
-```powershell
-python scripts/stage_ingestion_test_cases.py --case wrong-folder-date
-python scripts/stage_ingestion_test_cases.py --case duplicate-known
-python scripts/stage_ingestion_test_cases.py --case mixed-day
-```
-
 ## Repo Notes
 
 - `data_hub.db`

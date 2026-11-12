@@ -92,12 +92,6 @@ python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --previ
 python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --archive-root raw/garmin/archive --failed-root raw/garmin/failed --athlete-name "D Hayashi" --timezone America/Chicago
 ```
 
-### Stage ingestion test cases
-
-```powershell
-python scripts/stage_ingestion_test_cases.py --case all
-```
-
 ## Notes For Next Session
 
 - Read this roadmap first.
