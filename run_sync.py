@@ -25,6 +25,7 @@ from pathlib import Path
 os.chdir(Path(__file__).resolve().parent)
 
 import sync_garmin_api as garmin  # noqa: E402
+import sync_garmin_wellness as wellness  # noqa: E402
 
 ATHLETE_NAME = "D Hayashi"
 TIMEZONE = "America/Chicago"
@@ -77,8 +78,12 @@ def build_message(result, had_files):
         if result["failed"]:
             text += f", {result['failed']} failed"
         parts.append(text + ".")
+    if result["wellness"] and result["wellness"]["days_stored"] and not result["wellness_error"]:
+        parts.append(f"Wellness updated for {plural(result['wellness']['days_stored'], 'day')}.")
     if result["sync_error"]:
         parts.append(f"Garmin sync failed: {result['sync_error']}")
+    if result["wellness_error"]:
+        parts.append(f"Wellness sync failed: {result['wellness_error']}")
     if result["import_error"]:
         parts.append(f"Import failed: {result['import_error']}")
     days = result["key_days_left"]
@@ -131,6 +136,8 @@ def run_all(args, log):
         "skipped": 0,
         "failed": 0,
         "import_error": None,
+        "wellness": None,
+        "wellness_error": None,
     }
 
     garmin.load_dotenv()
@@ -155,7 +162,21 @@ def run_all(args, log):
             result.update(counts)
         result["import_error"] = error
 
-    result["ok"] = not result["sync_error"] and not result["import_error"]
+    # Same key as the activity sync, so skip when that was just rejected.
+    if not result["sync_error"] and not args.skip_wellness:
+        try:
+            result["wellness"] = wellness.run(
+                "data_hub.db", ATHLETE_NAME, TIMEZONE, log, backfill_days=args.wellness_days
+            )
+            if result["wellness"]["days_failed"]:
+                failed = result["wellness"]
+                result["wellness_error"] = (
+                    f"{plural(failed['days_failed'], 'day')} failed: {failed['first_error']}"
+                )
+        except garmin.GarminError as error:
+            result["wellness_error"] = str(error)
+
+    result["ok"] = not (result["sync_error"] or result["import_error"] or result["wellness_error"])
     result["message"] = build_message(result, had_files)
     result["finished_at"] = datetime.now(timezone.utc).isoformat()
     return result
@@ -185,6 +206,11 @@ def parse_args():
     parser.add_argument("--limit", type=int, default=50, help="Max new activities to download per run.")
     parser.add_argument("--since", default=None, help="Only consider activities on/after YYYY-MM-DD.")
     parser.add_argument("--full", action="store_true", help="Keep paging past known activities (backfill).")
+    parser.add_argument(
+        "--wellness-days", type=int, default=wellness.BACKFILL_DAYS,
+        help="How far back wellness data may be backfilled on the first run.",
+    )
+    parser.add_argument("--skip-wellness", action="store_true", help="Only sync activities.")
     parser.add_argument("--json", action="store_true", help="Print a JSON result on stdout.")
     parser.add_argument("--trigger", default="manual", help="Who started this run: manual or nightly.")
     parser.add_argument("--notify", action="store_true", help="Show a macOS notification when the run finishes (success or failure).")

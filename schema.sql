@@ -231,4 +231,56 @@ WHERE NOT EXISTS (
 INSERT OR IGNORE INTO schema_migrations(version)
 VALUES ('0003_null_invalid_gps');
 
+-- 0004: daily wellness (sleep, HRV, heart rate, body battery) from the Garmin Personal API.
+-- wellness_raw keeps Garmin's responses so more fields can be extracted later without refetching.
+CREATE TABLE IF NOT EXISTS wellness_daily (
+    athlete_id INTEGER NOT NULL,
+    calendar_date TEXT NOT NULL,
+    steps INTEGER,
+    step_goal INTEGER,
+    active_kcal REAL,
+    moderate_intensity_minutes INTEGER,
+    vigorous_intensity_minutes INTEGER,
+    resting_hr_bpm INTEGER,
+    resting_hr_7d_avg_bpm INTEGER,
+    min_hr_bpm INTEGER,
+    max_hr_bpm INTEGER,
+    avg_stress INTEGER,
+    body_battery_high INTEGER,
+    body_battery_low INTEGER,
+    body_battery_at_wake INTEGER,
+    sleep_seconds INTEGER,
+    deep_sleep_seconds INTEGER,
+    light_sleep_seconds INTEGER,
+    rem_sleep_seconds INTEGER,
+    awake_seconds INTEGER,
+    sleep_score INTEGER,
+    sleep_avg_hr_bpm REAL,
+    sleep_avg_spo2 REAL,
+    sleep_avg_respiration REAL,
+    sleep_start_utc TEXT,
+    sleep_end_utc TEXT,
+    hrv_last_night_avg INTEGER,
+    hrv_weekly_avg INTEGER,
+    hrv_status TEXT,
+    hrv_balanced_low INTEGER,
+    hrv_balanced_upper INTEGER,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (athlete_id, calendar_date),
+    FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+);
+
+CREATE TABLE IF NOT EXISTS wellness_raw (
+    athlete_id INTEGER NOT NULL,
+    calendar_date TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    payload TEXT NOT NULL,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (athlete_id, calendar_date, kind),
+    FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+);
+
+INSERT OR IGNORE INTO schema_migrations(version)
+VALUES ('0004_wellness');
+
 COMMIT;
