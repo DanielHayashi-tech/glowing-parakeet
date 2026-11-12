@@ -1,135 +1,58 @@
 # Garmin Ingestion Workflow
 
-## Current Human Flow
+## The Flow
 
-Today the Garmin retrieval process is:
+One command does everything, whether you press the button, run it by hand, or the nightly job runs it:
 
-1. log into Garmin Connect
-2. open an activity
-3. use the three-dot menu
-4. export the FIT file
-5. drop the raw file into `raw/garmin/inbox`
+```bash
+python run_sync.py
+```
 
-That is workable for now, but too manual to trust long term without a stronger ingestion pipeline.
+1. **Fetch activities.** `sync_garmin_api.py` asks the Garmin Personal API for the newest activities
+   and downloads the original FIT file for each one it does not already have, into `raw/garmin/inbox`.
+2. **Import.** `import_garmin_fit.py` reads every file in the inbox, writes `activities`, `laps`, and
+   `activity_samples`, moves imported files to `raw/garmin/archive/YYYY-MM-DD/`, and moves files it
+   cannot parse to `raw/garmin/failed/`.
+3. **Refresh wellness.** `sync_garmin_wellness.py` re-reads the last 3 days of sleep, HRV, heart rate,
+   and daily summary (30 days on the first run) and writes `wellness_daily` and `wellness_raw`.
+4. **Record the result** in `temp/last_sync.json`, which the Garmin Sync page shows.
 
-## Immediate Goal
-
-Reduce the fragile parts of the workflow without waiting for full Garmin automation.
-
-The system should support:
-
-- backfilling a date range such as the last 21 days
-- dropping new FIT files into a flat raw inbox
-- importing new files idempotently
-- archiving successful files
-- isolating failed files
-- logging every run and file event
+Details of the API itself are in `garmin-personal-api-notes.md`.
 
 ## Folder Layout
 
-Recommended raw file layout:
+- `raw/garmin/inbox` files waiting to be imported. A flat drop zone; no sub-folders or date naming needed.
+- `raw/garmin/archive` every successfully imported file, grouped by activity date. This is the raw
+  record the database can be rebuilt from.
+- `raw/garmin/failed` files that could not be imported.
 
-- `raw/garmin/inbox`
-- `raw/garmin/archive`
-- `raw/garmin/failed`
+## Behavior Worth Knowing
 
-Meaning:
-
-- `inbox` is a flat drop zone where newly exported FIT files land
-- `archive` stores files after successful import
-- `failed` stores files that could not be parsed or imported
-
-Users should not need to pre-organize inbox files by date.
-
-## Modes
-
-### Direct Import Mode
-
-Use this for:
-
-- one-time reprocessing from an alternate root
-- one-time backfills
-- sanity-checking a batch without moving files
-
-Behavior:
-
-- recursively scans the provided root
-- imports new files
-- logs imported, skipped, or failed outcomes
-- leaves files in place
-
-### Inbox Mode
-
-Use this for:
-
-- daily or frequent ongoing imports
-- files exported manually from Garmin Connect into the flat inbox
-
-Behavior:
-
-- scans `raw/garmin/inbox`
-- inspects file contents to determine activity date and type
-- imports each file
-- moves successful files into `raw/garmin/archive/YYYY-MM-DD/`
-- moves failed files into `raw/garmin/failed/`
-- logs all outcomes into the database
+- **Idempotent.** A file is recognised by its content hash and path, so syncing twice never duplicates
+  an activity. An already-imported file found in the inbox is cleared and archived as a duplicate.
+- **Manual fallback.** A `.fit` file dropped into the inbox is imported on the next sync, even when the
+  Garmin step fails (for example an expired key).
+- **Failures are separate.** A rejected key, a failed import, and a failed wellness day are each reported
+  in the summary and the notification; one does not hide another.
+- **Only one sync at a time.** A lock file stops the button and the nightly job colliding.
 
 ## Database Logging
 
-The ingestion pipeline now logs:
-
-- one row per ingestion run in `ingestion_runs`
+- one row per import run in `ingestion_runs`
 - one row per file event in `ingestion_run_files`
 
-This gives us visibility into:
+This shows when a run started and finished, how many files were scanned, imported, skipped, or failed,
+and which files were archived or moved to `failed`.
 
-- when a run started and finished
-- how many files were scanned
-- how many imported, skipped, or failed
-- which files had issues
-- which files were moved to archive or failed folders
+## Importing Files From Somewhere Else
 
-## Suggested Workflow For You Right Now
+```bash
+# one-off import from any folder, leaving files in place
+python import_garmin_fit.py --fit-root path/to/fit/files
 
-### Backfill the last 21 days
-
-1. export all desired activities from Garmin Connect
-2. drop the raw FIT files into `raw/garmin/inbox`
-3. run inbox-mode import
-4. confirm rows landed in `activities`, `laps`, and `activity_samples`
-5. confirm the files were archived
-
-### Ongoing use
-
-1. export new FIT file from Garmin Connect
-2. drop it into `raw/garmin/inbox`
-3. run inbox-mode import
-4. review the dashboard or ingestion logs
-
-## Commands
-
-### Inbox import with file movement
-
-```powershell
-python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --archive-root raw/garmin/archive --failed-root raw/garmin/failed
+# preview what would happen without importing
+python import_garmin_fit.py --fit-root path/to/fit/files --preview
 ```
 
-### Force re-import
-
-```powershell
-python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --force
-```
-
-## Why This Matters
-
-If retrieval breaks, we need to know exactly where the pipeline failed.
-
-This ingestion design helps us answer:
-
-- did the file ever arrive?
-- did the importer see it?
-- was it skipped as a duplicate?
-- did parsing fail?
-- where is the raw file now?
-
-That makes the rest of the app worth trusting.
+Use `--run-mode inbox --archive-root raw/garmin/archive --failed-root raw/garmin/failed` to also move
+files after processing, which is what `run_sync.py` does.

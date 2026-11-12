@@ -30,7 +30,7 @@ Right now that athlete is you, which is useful because it lets us validate the m
 Think in three layers:
 
 1. Connector layer
-   Garmin FIT parser, Garmin API sync, future Strava plugin, nutrition plugin, sleep plugin, coach notes plugin.
+   Garmin FIT parser, Garmin Personal API sync (activities and wellness), future Strava plugin, nutrition plugin, coach notes plugin.
 
 2. Canonical data layer
    The normalized relational schema that represents athletes, sessions, samples, metrics, and annotations.
@@ -426,16 +426,15 @@ For Garmin FIT imports:
 6. insert into `activities`, `laps`, `activity_samples`, and optional metrics
 7. store import status and timestamps
 
-Future automation path:
+Automation (done):
 
-Today the process may be manual file download plus import. Later, we can automate acquisition in a separate sync layer without changing the core relational model.
+Acquisition is automated in a separate sync layer, without changing the core relational model. `run_sync.py` pulls activity FIT files and daily wellness from the Garmin Personal API on demand and every night, then hands the files to the same import code that manual exports used.
 
-Examples:
+Other acquisition paths that would fit the same shape:
 
-- Garmin API synchronization if access is available
-- automated browser or export workflow if allowed and reliable
+- an automated browser or export workflow if allowed and reliable
 - polling a watched folder where new FIT files are dropped
-- a connector service that downloads source files on a schedule
+- another provider's API (for example Strava) writing into the same canonical tables
 
 The key idea is that file acquisition is separate from normalization and storage. That means we can improve automation later without rewriting the hub schema.
 
@@ -462,8 +461,8 @@ That is enough to:
 For the first pass, we should also assume:
 
 - one primary athlete
-- Garmin FIT file import as the only active connector
-- manual import is acceptable while ingestion and schema stabilize
+- Garmin as the only active connector: FIT files for activities, JSON for daily wellness
+- manual import of a FIT file stays available as a fallback
 - future integrations such as Strava should influence the design, but not complicate the MVP implementation
 
 We can add `activity_metrics` and `athlete_metrics` once the ingestion is stable.

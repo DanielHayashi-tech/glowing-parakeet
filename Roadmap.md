@@ -1,101 +1,40 @@
 # Roadmap
 
-## Current State
+## Where Things Stand
 
-- SQLite-backed data hub is working.
-- Garmin FIT import pipeline is working.
-- Local Next.js app is working.
-- Ingestion UI exists and can preview/process the Garmin inbox.
-- Inbox currently acts as a flat staging area.
-- Archive currently acts as the raw historical file reference.
+- Garmin Personal API sync works: activities arrive as FIT files, wellness as JSON.
+- A nightly launchd job keeps the database current, with a notification after every run.
+- The dashboard covers training (distance, pace, route) and recovery (sleep, resting HR, HRV).
+- The old manual staging workflow, the Python dashboard, and the date-hint code are gone.
 
-## Important Clarification
+## Ideas, Roughly In Order
 
-When inbox looked "empty," that meant there were no `.fit` files left in it.
-The date folders can still exist even if the inbox is operationally clear.
+1. **Training load and recovery together.** Plot weekly mileage against average HRV or sleep
+   so a hard block and a dip in recovery show up on the same page.
+2. **Elevation.** Outdoor runs imported so far have no altitude. Find out whether the API's FIT
+   files omit it or the importer drops it, then add an elevation profile to the route panel.
+3. **More wellness.** Stress, body battery through the day, and respiration are already stored
+   in `wellness_raw`. Pull them out into `wellness_daily` when a chart needs them.
+4. **A real map behind the route.** The route is currently just the line. Map tiles would need
+   an external service, so this is a privacy trade-off to decide on.
+5. **Per-activity pages.** Splits, pace and heart-rate profiles for any run, not only the latest.
+6. **Weekly and monthly summaries.** Totals and comparisons beyond the 7-day and 30-day windows.
+7. **Notes.** Free-text comments on an activity, using the existing `annotations` table.
 
-## Recently Completed
+## Known Limits
 
-- Built canonical Garmin FIT import into `activities`, `laps`, and `activity_samples`
-- Added ingestion run logging and file event logging
-- Added Garmin inbox/archive/failed folder workflow
-- Added ingestion preview flow
-- Added interactive ingestion actions in the UI
-- Simplified ingestion page language around a staging-area mental model
-- Changed duplicate processing so already-imported files can be cleared from inbox
-- Added repeatable ingestion test-case staging script
-- Removed the special `_already_imported` archive bucket and folded those files back into the main archive structure
-- Staged a wrong-folder-date inbox test case for UI validation
-- Shifted inbox toward a flat drop-zone model instead of user-created date folders
-- Changed ingestion page behavior so raw inbox files stay in a "needs check" staging state until a real preview report exists for the current inbox fingerprint
-- Added preview snapshot caching so a successful staging check can drive detected dates and activity types on reload
+- The Garmin Personal API key expires (reported as 30 days to a year). `GARMIN_KEY_EXPIRES`
+  in `.env` drives the warning, because Garmin does not report it.
+- Garmin can change the Personal API terms. The manual path (drop a `.fit` file in the inbox)
+  keeps working without it.
+- API FIT files have not been compared field by field against manual exports. Third parties
+  report that some proprietary fields are stripped.
+- The dashboard is light-theme only.
+- `DailyDistanceChart` and `PaceTrendChart` duplicate some drawing code with `RecoveryCharts`.
+  Worth merging if another chart is added.
 
-## Active MVP Focus
+## Notes For The Next Session
 
-Nail the ingestion experience before doing more visualization work.
-
-### MVP goals for ingestion
-
-- staging area should be easy to understand at a glance
-- user should know what is ready to import
-- user should know what failed and why
-- user should know when an inbox date hint does not match detected activity date
-- user should not need to pre-organize inbox files by date
-- user should not need the terminal for normal import workflow
-
-## Next Priority Work
-
-1. Add clear warning badges in the ingestion UI.
-   Goal:
-   Date-hint mismatches and parse problems should stand out visually.
-
-2. Add a dedicated "Problems" section on the ingestion page.
-   Goal:
-   Failed files and warning files should be separated from healthy files.
-
-3. Make processing history more human-readable.
-   Goal:
-   Replace ledger-ish wording with plain-language summaries like:
-   "Checked 4 files, imported 3, skipped 1 duplicate."
-
-4. Add test-driven ingestion validation.
-   Goal:
-   Use staged inbox scenarios to verify:
-   - wrong date hint
-   - already imported duplicate
-   - multiple activities on same day
-   Current staged case:
-   - wrong date hint in `raw/garmin/inbox/03-01-2026__22031296609_ACTIVITY.fit`
-
-5. Decide whether brand-new inbox files should be parsed live on page load or only after an explicit staging check.
-   Goal:
-   Keep the UI fast for large inboxes without hiding useful metadata.
-
-## Useful Commands
-
-### Start the app
-
-```powershell
-$env:Path += ';C:\Program Files\nodejs'
-& 'C:\Program Files\nodejs\npm.cmd' run dev -- --hostname 127.0.0.1 --port 3000
-```
-
-### Preview inbox
-
-```powershell
-python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --preview
-```
-
-### Process inbox
-
-```powershell
-python import_garmin_fit.py --fit-root raw/garmin/inbox --run-mode inbox --archive-root raw/garmin/archive --failed-root raw/garmin/failed --athlete-name "D Hayashi" --timezone America/Chicago
-```
-
-## Notes For Next Session
-
-- Read this roadmap first.
-- Stay focused on ingestion UX, not charts.
-- Treat staging clarity as the top priority.
-- Keep archive logic simple.
-- Keep updating this file as work progresses.
+- Read `docs/garmin-personal-api-notes.md` first. It has the endpoints, gotchas, and findings.
+- Keep Garmin-specific logic in the sync and import layer, not in the schema.
+- Keep `README.md` and this file current when the flow changes.

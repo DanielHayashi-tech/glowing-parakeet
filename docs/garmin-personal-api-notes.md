@@ -168,7 +168,7 @@ The importer needs no change for activities.
 
 - the API FIT file previewed cleanly through `import_garmin_fit.py --preview` (running activity, one session, correct detected date)
 - the connector should only fetch, unzip, and write `<activityId>_ACTIVITY.fit` into `raw/garmin/inbox`
-- everything after that is the existing flow: staging check, process, archive, `source_files` idempotency
+- everything after that is the importer: parse, write to the database, archive, `source_files` idempotency
 
 This matches the layering in `data-hub-architecture.md`: the API is a second connector feeding the same canonical tables.
 
@@ -182,22 +182,37 @@ This matches the layering in `data-hub-architecture.md`: the API is a second con
 - treat `404` and `204` on download as "no original file", not an error
 - fail clearly when the key is missing, rejected, or expired, and surface that in the UI instead of silently syncing nothing
 
+## Wellness Endpoints
+
+All four returned `200` and were inspected against real data on 2026-11-12. Stored by `sync_garmin_wellness.py`.
+
+| Kind | Path | Used for |
+|---|---|---|
+| summary | `/usersummary-service/usersummary/daily?calendarDate=YYYY-MM-DD` | steps, resting/min/max HR, stress, body battery, intensity minutes |
+| sleep | `/sleep-service/sleep/dailySleep?date=YYYY-MM-DD` | duration, stages, score, SpO2, respiration, sleep window |
+| hrv | `/hrv-service/hrv/YYYY-MM-DD` | overnight average, weekly average, status, balanced range |
+| heart_rate | `/wellness-service/wellness/dailyHeartRate?date=YYYY-MM-DD` | resting HR fallback; full 2-minute series is kept in `wellness_raw` |
+
+- the sleep `calendarDate` is the day you woke up, so "last night" is today's row
+- some nights have no HRV or sleep value; those columns stay `NULL` and charts break the line instead of bridging
+- a request costs about 0.8 s with the built-in delay, so a 30-day backfill takes about 85 s and a normal run about 10 s
+- schema and storage design: see `schema-notes.md`
+
 ## Open Questions
 
-- exact key expiry for our key, and how to show days remaining in the UI
-- Garmin's real rate limit
+- Garmin's real rate limit (none published; the client backs off on `429`)
 - whether API FIT files differ from manual exports in any field we use (compare one activity both ways)
 - whether the API exposes older history in bulk, and how far back
-- wellness response shapes and which of them earn their own tables
+- elevation: outdoor runs imported so far have no altitude; is it missing from the API's FIT files or dropped by the importer?
 - whether the Personal terms allow anything beyond reading our own data into a local store (we are well inside "own data, own use")
 
-## Suggested Build Order
+## Build Order (status)
 
-1. a sync script that pulls new activity FIT files into inbox
-2. a "Sync from Garmin" action on the ingestion page that runs it
-3. key and token status in the UI, including expiry warnings
-4. wellness ingestion: inspect response shapes, then add tables to `schema.sql`
-5. revisit the roadmap, since automatic arrival reduces the need for manual staging polish
+1. sync script that pulls new activity FIT files into the inbox: done
+2. "Sync from Garmin" button: done
+3. key expiry warning: done, driven by `GARMIN_KEY_EXPIRES` in `.env` because Garmin does not report it
+4. wellness ingestion and Recovery dashboard section: done
+5. nightly job, one-step sync, legacy cleanup, README and Roadmap: done
 
 ## Data Quality Notes
 

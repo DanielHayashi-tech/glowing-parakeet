@@ -55,6 +55,21 @@ For the MVP, `annotations` is the home for:
 
 If comments later need threading, authorship rules, or replies, we can split out a dedicated `comments` table.
 
+## Wellness Tables (migration 0004)
+
+Daily wellness is not an activity, so it has its own tables:
+
+- `wellness_daily` has one row per athlete per day: steps, resting and min/max heart rate, stress, body battery, sleep duration and stages, sleep score, overnight HRV and Garmin's balanced range.
+- `wellness_raw` keeps Garmin's original JSON per day and kind (summary, sleep, hrv, heart_rate). It is the same idea as keeping the raw FIT file: more fields can be extracted later without calling the API again.
+
+Re-fetching a day updates both tables in place, because today's numbers keep changing and last night's sleep lands in the morning.
+
+## Migrations
+
+`schema.sql` is idempotent and runs on every import and wellness sync. Structure uses `CREATE TABLE IF NOT EXISTS`. One-off data fixes guard themselves with a `schema_migrations` check so they run once:
+
+- `0003_null_invalid_gps` nulled the FIT "no GPS fix" sentinel (180 degrees) that early imports stored as a real coordinate. The importer now stores `NULL`.
+
 ## Near-Term Follow-Ups
 
 The next likely additions after the MVP are:
@@ -62,4 +77,4 @@ The next likely additions after the MVP are:
 - `activity_metrics` for derived analytics
 - `athlete_metrics` for threshold and profile values over time
 - a dedicated `comments` table if annotations become more structured
-- ingestion metadata tables if we build scheduled sync jobs
+- more wellness fields (stress, body battery through the day) promoted out of `wellness_raw`
