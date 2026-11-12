@@ -18,7 +18,7 @@ import os
 import re
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from pathlib import Path
 
 # Relative paths below (and .env) resolve against the repo, wherever we are launched from.
@@ -34,6 +34,8 @@ FAILED = Path("raw/garmin/failed")
 STATUS_PATH = Path("temp/last_sync.json")
 LOCK_PATH = Path("temp/sync.lock")
 IMPORT_TIMEOUT_SECONDS = 15 * 60
+KEY_WARN_DAYS = 14
+KEY_NOTIFY_DAYS = 7
 DONE_PATTERN = re.compile(r"Done\. imported=(\d+) skipped=(\d+) failed=(\d+)")
 
 
@@ -43,6 +45,21 @@ def plural(count, word):
 
 def activities(count):
     return "1 activity" if count == 1 else f"{count} activities"
+
+
+def key_days_left():
+    """Days until the Garmin key expires, from GARMIN_KEY_EXPIRES=YYYY-MM-DD in .env.
+
+    Garmin does not expose the key's expiry through the API, so the date is
+    copied from Garmin Connect by hand. Returns None when unset or unreadable.
+    """
+    raw = os.environ.get("GARMIN_KEY_EXPIRES", "").strip()
+    if not raw:
+        return None
+    try:
+        return (date.fromisoformat(raw) - date.today()).days
+    except ValueError:
+        return None
 
 
 def build_message(result, had_files):
@@ -64,6 +81,12 @@ def build_message(result, had_files):
         parts.append(f"Garmin sync failed: {result['sync_error']}")
     if result["import_error"]:
         parts.append(f"Import failed: {result['import_error']}")
+    days = result["key_days_left"]
+    if days is not None and days <= KEY_WARN_DAYS:
+        if days < 0:
+            parts.append("The Garmin key has expired. Generate a new one in Garmin Connect.")
+        else:
+            parts.append(f"The Garmin key expires in {plural(days, 'day')}. Generate a new one in Garmin Connect.")
     return " ".join(parts)
 
 
@@ -111,6 +134,7 @@ def run_all(args, log):
     }
 
     garmin.load_dotenv()
+    result["key_days_left"] = key_days_left()
     sync_args = argparse.Namespace(
         inbox=str(INBOX),
         db="data_hub.db",
@@ -139,14 +163,19 @@ def run_all(args, log):
 
 def write_status(result):
     STATUS_PATH.parent.mkdir(parents=True, exist_ok=True)
-    keys = ("trigger", "ok", "message", "started_at", "finished_at", "imported", "skipped", "failed")
+    keys = ("trigger", "ok", "message", "started_at", "finished_at", "imported", "skipped", "failed", "key_days_left")
     STATUS_PATH.write_text(json.dumps({key: result[key] for key in keys}, indent=2), encoding="utf-8")
 
 
-def notify(message, ok):
+def notify(message, ok, days_left=None):
     """macOS notification after every run, so you know it ran (and a failure, like an expired key, is never silent)."""
     escaped = message.replace("\\", "\\\\").replace('"', '\\"')
-    title = "move2Zero sync" if ok else "move2Zero sync needs attention"
+    if not ok:
+        title = "move2Zero sync needs attention"
+    elif days_left is not None and days_left <= KEY_NOTIFY_DAYS:
+        title = "move2Zero sync: Garmin key expires soon"
+    else:
+        title = "move2Zero sync"
     script = f'display notification "{escaped}" with title "{title}"'
     subprocess.run(["osascript", "-e", script], capture_output=True, check=False)
 
@@ -180,7 +209,7 @@ def main():
     write_status(result)
 
     if args.notify:
-        notify(result["message"], result["ok"])
+        notify(result["message"], result["ok"], result["key_days_left"])
 
     if args.json:
         result["log"] = lines

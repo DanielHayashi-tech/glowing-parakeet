@@ -18,7 +18,8 @@ export default function IngestionPage() {
   const status = getSyncStatus();
   const runs = getRecentIngestionRuns();
   const events = getRecentIngestionEvents();
-  const { lastSync } = status;
+  const { lastSync, keyExpiry } = status;
+  const keyDays = keyExpiry && !keyExpiry.invalid ? keyExpiry.daysLeft : null;
 
   return (
     <main className="page-shell">
@@ -63,6 +64,25 @@ export default function IngestionPage() {
             {status.nightlyInstalled
               ? "Runs every night at midnight. If the Mac is asleep it runs when it wakes."
               : "Run scripts/install_nightly_sync.sh to sync automatically every night."}
+          </p>
+        </article>
+        <article className="card">
+          <div className="metric-label">Garmin key</div>
+          <div className="metric-value" style={{ fontSize: "1.4rem" }}>
+            {keyDays === null
+              ? "Expiry not set"
+              : keyDays < 0
+                ? "Expired"
+                : `${keyDays} day${keyDays === 1 ? "" : "s"} left`}
+          </div>
+          <p className="muted">
+            {keyExpiry?.invalid
+              ? `GARMIN_KEY_EXPIRES in .env must look like 2027-01-31 (found "${keyExpiry.raw}").`
+              : keyDays === null
+                ? "Garmin does not report this. Copy the expiry date from Garmin Connect into .env as GARMIN_KEY_EXPIRES=YYYY-MM-DD to get a warning."
+                : keyDays <= 14
+                  ? `Expires ${keyExpiry.date}. Generate a new key in Garmin Connect and update .env.`
+                  : `Expires ${keyExpiry.date}. You will be warned two weeks before.`}
           </p>
         </article>
         <article className="card">
