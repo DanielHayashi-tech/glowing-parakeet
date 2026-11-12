@@ -199,11 +199,10 @@ This matches the layering in `data-hub-architecture.md`: the API is a second con
 4. wellness ingestion: inspect response shapes, then add tables to `schema.sql`
 5. revisit the roadmap, since automatic arrival reduces the need for manual staging polish
 
-## Data Quality Notes (found while building the dashboard)
+## Data Quality Notes
 
-- `activity_samples.latitude_semicircles` and `longitude_semicircles` contain the FIT invalid sentinel `2147483647` ("no GPS fix yet") on the first few samples of outdoor runs. Converted to degrees it is exactly 180, so it ruins any bounding box or distance calculation.
-- the importer currently stores these as real values. Any GPS query must filter them out: latitude between `-1073741824` and `1073741824`, longitude between `-2147483647` and `2147483646`. `lib/data.js` does this in `VALID_FIX_SQL`.
-- the cleaner long-term fix is to store `NULL` for invalid fixes in `import_garmin_fit.py` (or `fit_summary.py`). Not done yet because it changes stored data and would need a re-import.
+- FIT files mark "no GPS fix yet" with the invalid sentinel `2147483647`, which converts to exactly 180 degrees. Early imports stored it as a real coordinate and it broke route maps.
+- fixed 2026-11-12: `fit_summary.py` now stores `NULL` for invalid fixes, and migration `0003_null_invalid_gps` in `schema.sql` cleaned the rows already stored (123 in the first month of data). Run once, recorded in `schema_migrations`.
 - treadmill runs have no GPS and no altitude, so they are excluded from the route panel
 - altitude is also empty on the outdoor runs imported so far, so there is no elevation profile yet
 - long stops (the timer keeps running) show up as sharp slow spikes in the pace profile, which is accurate; the axis clamps them so they do not flatten the rest of the line

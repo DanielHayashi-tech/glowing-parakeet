@@ -404,8 +404,9 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
                 "power_watts": clean_number(record.get(FIELD_POWER), {65535, 4294967295}),
                 "altitude_m": altitude_from_fit(record.get(FIELD_ALTITUDE)),
                 "temperature_c": clean_number(record.get(FIELD_TEMPERATURE), {255}),
-                "latitude_semicircles": record.get(FIELD_POSITION_LAT),
-                "longitude_semicircles": record.get(FIELD_POSITION_LONG),
+                # 0x7FFFFFFF is FIT's "no GPS fix yet" marker (180 degrees if kept).
+                "latitude_semicircles": clean_number(record.get(FIELD_POSITION_LAT), {2147483647}),
+                "longitude_semicircles": clean_number(record.get(FIELD_POSITION_LONG), {2147483647}),
             }
         )
 

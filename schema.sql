@@ -216,4 +216,19 @@ VALUES ('0001_initial_schema');
 INSERT OR IGNORE INTO schema_migrations(version)
 VALUES ('0002_ingestion_runs');
 
+-- 0003: earlier imports stored FIT's "no GPS fix" marker (0x7FFFFFFF = 180 degrees).
+-- Null those out once; the importer no longer stores them.
+UPDATE activity_samples
+SET latitude_semicircles = NULL, longitude_semicircles = NULL
+WHERE NOT EXISTS (
+        SELECT 1 FROM schema_migrations WHERE version = '0003_null_invalid_gps'
+    )
+    AND (
+        latitude_semicircles NOT BETWEEN -1073741824 AND 1073741824
+        OR longitude_semicircles = 2147483647
+    );
+
+INSERT OR IGNORE INTO schema_migrations(version)
+VALUES ('0003_null_invalid_gps');
+
 COMMIT;

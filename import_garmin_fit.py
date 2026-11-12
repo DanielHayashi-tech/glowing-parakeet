@@ -45,29 +45,6 @@ def compute_sha256(filepath):
     return hasher.hexdigest()
 
 
-def parse_folder_date(folder_name):
-    for fmt in ("%m-%d-%Y", "%-m-%d-%Y", "%m-%-d-%Y", "%-m-%-d-%Y"):
-        try:
-            return datetime.strptime(folder_name, fmt).date().isoformat()
-        except ValueError:
-            continue
-    parts = folder_name.split("-")
-    if len(parts) == 3 and all(part.isdigit() for part in parts):
-        month, day, year = parts
-        try:
-            return datetime(int(year), int(month), int(day)).date().isoformat()
-        except ValueError:
-            return None
-    return None
-
-
-def extract_date_hint_from_filename(filename):
-    parts = filename.split("__", 1)
-    if len(parts) != 2:
-        return None
-    return parse_folder_date(parts[0])
-
-
 def ensure_schema(connection, schema_path):
     schema_sql = Path(schema_path).read_text(encoding="utf-8")
     connection.executescript(schema_sql)
@@ -450,7 +427,6 @@ def inspect_fit_file(connection, fit_path, timezone_name):
                 f"Found {len(sessions)} session messages; importer currently uses the first session"
             )
 
-    date_hint = extract_date_hint_from_filename(fit_path.name)
     activity_date = None
     activity_type = None
     sport = None
@@ -461,10 +437,6 @@ def inspect_fit_file(connection, fit_path, timezone_name):
         )
         activity_type = canonical["activity"]["activity_type"]
         sport = canonical["activity"]["sport"]
-        if date_hint is not None and date_hint != activity_date:
-            warnings.append(
-                f"Inbox date hint {date_hint} does not match activity date {activity_date}"
-            )
 
     duplicate_status = "new"
     source_file_id = None
@@ -480,7 +452,6 @@ def inspect_fit_file(connection, fit_path, timezone_name):
     return {
         "file_path": str(fit_path),
         "file_name": fit_path.name,
-        "date_hint": date_hint,
         "file_hash": file_hash,
         "file_size_bytes": fit_path.stat().st_size,
         "source_file_id": source_file_id,
@@ -575,9 +546,8 @@ def build_archive_destination(archive_root, canonical_activity, source_path):
 
 
 def build_duplicate_archive_destination(archive_root, source_path):
-    date_hint = extract_date_hint_from_filename(source_path.name)
-    date_dir = date_hint if date_hint else utc_now_iso()[:10]
-    return Path(archive_root) / date_dir / source_path.name
+    # A known duplicate has no new activity date to file under, so use today's folder.
+    return Path(archive_root) / utc_now_iso()[:10] / source_path.name
 
 
 def move_imported_file(connection, source_file_id, source_path, archive_root, canonical):
