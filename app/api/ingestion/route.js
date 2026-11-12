@@ -1,170 +1,88 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs";
-import path from "node:path";
 
 import { NextResponse } from "next/server";
 
 import {
-  getImporterScript,
-  getInboxPreview,
-  getLatestRunForMode,
   getPythonExecutable,
   getRecentIngestionEvents,
-  getRecentIngestionRuns
+  getRecentIngestionRuns,
+  getSyncScript,
+  getSyncStatus
 } from "@/lib/ingestion";
 
 export const dynamic = "force-dynamic";
 
-const previewCachePath = path.join(process.cwd(), "temp", "ingestion_preview.json");
-
-function writePreviewCache(fingerprint, preview) {
-  fs.mkdirSync(path.dirname(previewCachePath), { recursive: true });
-  fs.writeFileSync(
-    previewCachePath,
-    JSON.stringify(
-      {
-        fingerprint,
-        generatedAt: new Date().toISOString(),
-        preview
-      },
-      null,
-      2
-    ),
-    "utf8"
-  );
-}
-
-function clearPreviewCache() {
-  if (fs.existsSync(previewCachePath)) {
-    fs.unlinkSync(previewCachePath);
-  }
-}
+// A first backfill can take a few minutes (one download per activity).
+const SYNC_TIMEOUT_MS = 20 * 60 * 1000;
 
 export function GET() {
   return NextResponse.json({
-    inbox: getInboxPreview(),
+    status: getSyncStatus(),
     runs: getRecentIngestionRuns(),
     events: getRecentIngestionEvents()
   });
 }
 
-function parseJsonStdout(stdoutText) {
+function parseJson(text) {
   try {
-    return JSON.parse(stdoutText);
+    return JSON.parse(text);
   } catch {
     return null;
   }
 }
 
-function runImporter(args) {
-  const command = [
-    getImporterScript(),
-    "--fit-root",
-    "raw/garmin/inbox",
-    "--timezone",
-    "America/Chicago",
-    ...args
-  ];
-
-  return spawnSync(getPythonExecutable(), command, {
+// run_sync.py does the work (fetch from Garmin, import, archive) so the button
+// and the nightly job behave identically. This route only runs it and reports.
+function runSync() {
+  const processResult = spawnSync(getPythonExecutable(), [getSyncScript(), "--json"], {
     cwd: process.cwd(),
-    encoding: "utf8"
+    encoding: "utf8",
+    timeout: SYNC_TIMEOUT_MS
   });
+  const result = parseJson(processResult.stdout);
+
+  if (processResult.error?.code === "ETIMEDOUT") {
+    return NextResponse.json(
+      {
+        kind: "error",
+        message:
+          "Sync timed out. Anything already downloaded is safe; run it again to continue."
+      },
+      { status: 500 }
+    );
+  }
+
+  if (!result) {
+    return NextResponse.json(
+      {
+        kind: "error",
+        message: "Sync failed to start. Check the error output below.",
+        stderr: processResult.stderr
+      },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json(
+    {
+      kind: result.ok ? "sync" : "error",
+      message: result.message,
+      stdout: (result.log ?? []).join("\n"),
+      stderr: processResult.stderr
+    },
+    { status: result.ok ? 200 : 500 }
+  );
 }
 
 export async function POST(request) {
   const body = await request.json().catch(() => ({}));
-  const action = body?.action;
-  const preview = getInboxPreview();
 
-  if (!["preview", "import"].includes(action)) {
+  if (body?.action !== "sync") {
     return NextResponse.json(
-      {
-        kind: "error",
-        message: "Unknown ingestion action."
-      },
+      { kind: "error", message: "Unknown action." },
       { status: 400 }
     );
   }
 
-  if (action === "import" && preview.fileCount === 0) {
-    const latestImport = getLatestRunForMode("inbox");
-    return NextResponse.json({
-      kind: "noop",
-      message:
-        "The staging area is already clear, so there was nothing to process.",
-      preview,
-      latestRun: latestImport
-    });
-  }
-
-  if (action === "preview") {
-    const latestPreview = getLatestRunForMode("inbox_preview");
-    if (latestPreview?.notes?.includes(preview.fingerprint)) {
-      return NextResponse.json({
-        kind: "noop",
-        message:
-          "Nothing changed in the staging area since the last check, so the current report is still valid.",
-        preview,
-        latestRun: latestPreview
-      });
-    }
-
-    const processResult = runImporter([
-      "--run-mode",
-      "inbox",
-      "--preview",
-      "--preview-json",
-      "--notes",
-      `fingerprint=${preview.fingerprint}`
-    ]);
-    const parsed = parseJsonStdout(processResult.stdout);
-    if (processResult.status === 0 && parsed) {
-      writePreviewCache(preview.fingerprint, parsed);
-    }
-
-    return NextResponse.json(
-      {
-        kind: processResult.status === 0 ? "preview" : "error",
-        message:
-          processResult.status === 0
-            ? "Staging area check completed. Review the report below before processing."
-            : "Preview failed. Check the error output below.",
-        preview: parsed ?? preview,
-        stdout: processResult.stdout,
-        stderr: processResult.stderr
-      },
-      { status: processResult.status === 0 ? 200 : 500 }
-    );
-  }
-
-  const processResult = runImporter([
-    "--run-mode",
-    "inbox",
-    "--archive-root",
-    "raw/garmin/archive",
-    "--failed-root",
-    "raw/garmin/failed",
-    "--athlete-name",
-    "D Hayashi",
-    "--notes",
-    `fingerprint=${preview.fingerprint}`
-  ]);
-
-  clearPreviewCache();
-  const refreshedPreview = getInboxPreview();
-
-  return NextResponse.json(
-    {
-      kind: processResult.status === 0 ? "import" : "error",
-      message:
-        processResult.status === 0
-          ? "Processing completed. New files were imported and already-imported duplicates were cleared out of the staging area."
-          : "Processing failed. Review the error output below and check the failed folder.",
-      preview: refreshedPreview,
-      stdout: processResult.stdout,
-      stderr: processResult.stderr
-    },
-    { status: processResult.status === 0 ? 200 : 500 }
-  );
+  return runSync();
 }

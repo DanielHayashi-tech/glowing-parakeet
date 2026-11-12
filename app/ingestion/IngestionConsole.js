@@ -9,47 +9,38 @@ function RenderActionResult({ result }) {
 
   return (
     <section className="section">
-      <div className="section-header">
-        <div>
-          <h2>Latest Action</h2>
-          <p>Real-time feedback from the ingestion controls.</p>
-        </div>
-      </div>
       <div className="card">
-        <div className="metric-label">Latest Result</div>
-        <div className="metric-value" style={{ fontSize: "1.4rem" }}>
-          {result.kind}
+        <div className="metric-label">
+          {result.kind === "error" ? "Sync needs attention" : "Sync finished"}
         </div>
-        <p className="muted">{result.message}</p>
-        {result.stdout ? (
-          <pre style={{ marginTop: "14px" }}>{result.stdout}</pre>
-        ) : null}
+        <p style={{ marginTop: 8 }}>{result.message}</p>
+        {result.stdout ? <pre style={{ marginTop: "14px" }}>{result.stdout}</pre> : null}
         {result.stderr ? (
-          <pre style={{ marginTop: "14px", background: "#3a1717" }}>
-            {result.stderr}
-          </pre>
+          <pre style={{ marginTop: "14px", background: "#3a1717" }}>{result.stderr}</pre>
         ) : null}
       </div>
     </section>
   );
 }
 
-export default function IngestionConsole({ initialPreview }) {
+export default function IngestionConsole() {
   const [result, setResult] = useState(null);
   const [isPending, startTransition] = useTransition();
 
-  function runAction(action) {
+  function runSync() {
     startTransition(async () => {
       const response = await fetch("/api/ingestion", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ action })
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "sync" })
       });
       const payload = await response.json();
       setResult(payload);
-      window.location.reload();
+      // Reloading would wipe the message, so keep errors (like an expired
+      // Garmin key) on screen.
+      if (payload.kind !== "error") {
+        window.location.reload();
+      }
     });
   }
 
@@ -59,18 +50,10 @@ export default function IngestionConsole({ initialPreview }) {
         <button
           className="button-link primary"
           disabled={isPending}
-          onClick={() => runAction("preview")}
+          onClick={runSync}
           type="button"
         >
-          {isPending ? "Working..." : "Check Staging Area"}
-        </button>
-        <button
-          className="button-link accent"
-          disabled={isPending}
-          onClick={() => runAction("import")}
-          type="button"
-        >
-          {isPending ? "Working..." : "Process Staging Area"}
+          {isPending ? "Syncing..." : "Sync from Garmin now"}
         </button>
       </div>
 
