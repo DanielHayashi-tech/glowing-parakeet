@@ -15,7 +15,7 @@ Everything runs on your machine. Nothing is sent anywhere except the requests to
 - **Dashboard** (`/`): last-7-day KPIs, daily distance, pace per run, the latest outdoor run
   on a route map, and a Recovery section (sleep, resting heart rate, HRV, body battery)
 - **Garmin Sync** (`/ingestion`): a sync button, the last result, key status, and history
-- **Automatic sync**: a nightly job at midnight that also runs when the Mac wakes if it was asleep
+- **Automatic sync**: every hour, at login, and when the Mac wakes. The dashboard warns when data is stale
 
 ## Requirements
 
@@ -58,10 +58,10 @@ Everything runs on your machine. Nothing is sent anywhere except the requests to
 
    Open http://127.0.0.1:3000
 
-5. Turn on the nightly sync:
+5. Turn on the automatic (hourly) sync:
 
    ```bash
-   scripts/install_nightly_sync.sh
+   scripts/install_sync_schedule.sh
    ```
 
 ## Map Imagery
@@ -85,12 +85,13 @@ Outside US coverage the default returns no imagery and the map falls back to the
 
 ## Daily Use
 
-You should not need to do anything. The nightly job syncs at 00:00 and shows a macOS
-notification when it finishes, or when something needs attention.
+You should not need to do anything. The sync runs every hour and when the Mac wakes, and shows a
+macOS notification only when something needs attention or new activities arrive.
 
 To sync right now, press **Sync from Garmin now** on `/ingestion` or run `python run_sync.py`.
 
-If the Mac is asleep at midnight the job runs when it wakes.
+A sync missed while the Mac was asleep runs once when it wakes. If the last successful sync is
+more than 3 hours old, the dashboard shows a stale-data banner.
 
 ## When Something Goes Wrong
 
@@ -120,15 +121,15 @@ python run_sync.py --since 2026-10-01 --full   # backfill activities from a date
 python sync_garmin_api.py --dry-run      # see what would download, write nothing
 python import_garmin_fit.py --fit-root some/folder   # import FIT files from anywhere
 
-scripts/install_nightly_sync.sh --run-now     # trigger the nightly job once
-scripts/install_nightly_sync.sh --uninstall   # remove the nightly job
+scripts/install_sync_schedule.sh --run-now     # trigger the scheduled job once
+scripts/install_sync_schedule.sh --uninstall   # remove the scheduled job
 ```
 
-Nightly job output: `~/Library/Logs/move2zero-sync.log`.
+Scheduled job output: `~/Library/Logs/move2zero-sync.log`.
 
 ## Layout
 
-- `run_sync.py` one entry point for the button and the nightly job
+- `run_sync.py` one entry point for the button and the scheduled job
 - `sync_garmin_api.py` downloads new activity FIT files
 - `sync_garmin_wellness.py` downloads daily sleep, HRV, heart rate, and summary
 - `import_garmin_fit.py`, `fit_summary.py` parse FIT files into the database

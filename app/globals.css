@@ -797,3 +797,14 @@ pre {
   background: #e4ddcd;
   line-height: 0;
 }
+
+.stale-banner {
+  margin: 0 0 18px;
+  padding: 12px 16px;
+  border: 1px solid #e0b251;
+  border-radius: 14px;
+  background: #fff3d6;
+  color: var(--ink);
+  font-size: 0.9rem;
+  font-weight: 600;
+}

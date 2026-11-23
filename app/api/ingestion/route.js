@@ -32,7 +32,7 @@ function parseJson(text) {
 }
 
 // run_sync.py does the work (fetch from Garmin, import, archive) so the button
-// and the nightly job behave identically. This route only runs it and reports.
+// and the scheduled job behave identically. This route only runs it and reports.
 function runSync() {
   const processResult = spawnSync(getPythonExecutable(), [getSyncScript(), "--json"], {
     cwd: process.cwd(),

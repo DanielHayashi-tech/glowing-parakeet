@@ -3,7 +3,7 @@
 ## Where Things Stand
 
 - Garmin Personal API sync works: activities arrive as FIT files, wellness as JSON.
-- A nightly launchd job keeps the database current, with a notification after every run.
+- An hourly launchd job (also on wake and at login) keeps the database current and notifies only when something matters.
 - The dashboard covers training (distance, pace, route) and recovery (sleep, resting HR, HRV).
 - The old manual staging workflow, the Python dashboard, and the date-hint code are gone.
 

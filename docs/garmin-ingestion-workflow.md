@@ -2,7 +2,7 @@
 
 ## The Flow
 
-One command does everything, whether you press the button, run it by hand, or the nightly job runs it:
+One command does everything, whether you press the button, run it by hand, or the scheduled job runs it:
 
 ```bash
 python run_sync.py
@@ -34,7 +34,7 @@ Details of the API itself are in `garmin-personal-api-notes.md`.
   Garmin step fails (for example an expired key).
 - **Failures are separate.** A rejected key, a failed import, and a failed wellness day are each reported
   in the summary and the notification; one does not hide another.
-- **Only one sync at a time.** A lock file stops the button and the nightly job colliding.
+- **Only one sync at a time.** A lock file stops the button and the scheduled job colliding.
 
 ## Database Logging
 

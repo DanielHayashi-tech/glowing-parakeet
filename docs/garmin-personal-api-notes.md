@@ -14,12 +14,12 @@ Built: `sync_garmin_api.py`, `run_sync.py`, the sync page, and the nightly job. 
 
 ## Sync Flow
 
-`run_sync.py` is the single entry point. The Sync button and the nightly job both call it, so they behave identically.
+`run_sync.py` is the single entry point. The Sync button and the scheduled job both call it, so they behave identically.
 
 ```bash
 python run_sync.py                 # human-readable
 python run_sync.py --json          # what the app route parses
-python run_sync.py --trigger nightly --notify
+python run_sync.py --trigger scheduled --notify
 ```
 
 What one run does:
@@ -31,7 +31,7 @@ What one run does:
 Details worth remembering:
 
 - a failed Garmin step does not stop the import, so a `.fit` dropped into the inbox by hand still gets imported when the key has expired
-- a lock file (`temp/sync.lock`) stops the button and the nightly job from running at the same time
+- a lock file (`temp/sync.lock`) stops the button and the scheduled job from running at the same time
 - athlete name and timezone live at the top of `run_sync.py`, not in the JS route
 - `--notify` raises a macOS notification on failure, so an expired key is not silent
 
@@ -42,20 +42,21 @@ Details worth remembering:
 - success reloads the page and the result shows in the "Last sync" card; errors stay on screen
 - the old Check Staging Area / Process Staging Area actions, preview cache, and date-hint logic were removed
 
-## Nightly Sync
+## Scheduled Sync
 
 ```bash
-scripts/install_nightly_sync.sh              # every night at 00:00
-scripts/install_nightly_sync.sh --run-now    # trigger one run now
-scripts/install_nightly_sync.sh --uninstall
+scripts/install_sync_schedule.sh              # every hour, at login, and on wake
+scripts/install_sync_schedule.sh --run-now    # trigger one run now
+scripts/install_sync_schedule.sh --uninstall
 ```
 
-- installs a launchd agent at `~/Library/LaunchAgents/com.move2zero.nightly-sync.plist`, generated with this machine's paths
-- launchd runs a missed job when the Mac wakes, so a sleeping laptop at midnight still syncs
+- installs a launchd agent at `~/Library/LaunchAgents/com.move2zero.sync.plist`, generated with this machine's paths; it replaces the older nightly agent
+- uses a calendar interval (every hour at :00). The macOS man page (`launchd.plist(5)`) says a missed calendar job runs the next time the Mac wakes, coalesced into one run. `StartInterval` is not used because the same page says it is skipped while asleep
 - output goes to `~/Library/Logs/move2zero-sync.log`
-- the Garmin Sync page shows whether the agent is installed and the result of the last run
-- verified 2026-11-12 by triggering it through launchd (`trigger: nightly`, `ok: true`)
-- the key still expires eventually (30 days to a year, unconfirmed). When it does the nightly run fails with a notification and the page shows "Needs attention". Generate a new key in Garmin Connect and update `.env`.
+- notifications are quiet by default: failure (not repeated within 6 hours), new activities, or the Garmin key near expiry (once a day)
+- `temp/last_sync.json` keeps `last_success_at` separate from the last attempt, so the dashboard can say how stale the data is (more than 3 hours)
+- retrying is safe: downloads are skipped when the file is known, files left in the inbox are imported next run, and the database rejects a second row for the same Garmin activity
+- the key still expires eventually (30 days to a year, unconfirmed). When it does the run fails with a notification and the page shows "Needs attention". Generate a new key in Garmin Connect and update `.env`.
 
 ## What The Personal Tier Is
 
@@ -212,7 +213,7 @@ All four returned `200` and were inspected against real data on 2026-11-12. Stor
 2. "Sync from Garmin" button: done
 3. key expiry warning: done, driven by `GARMIN_KEY_EXPIRES` in `.env` because Garmin does not report it
 4. wellness ingestion and Recovery dashboard section: done
-5. nightly job, one-step sync, legacy cleanup, README and Roadmap: done
+5. scheduled job, one-step sync, legacy cleanup, README and Roadmap: done
 
 ## Data Quality Notes
 

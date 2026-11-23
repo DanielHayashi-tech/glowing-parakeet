@@ -13,6 +13,7 @@ import {
   getRunningMileageLastTwelveWeeks,
   getTrainingDashboard
 } from "@/lib/data";
+import { getSyncStatus } from "@/lib/ingestion";
 import { getMapConfig } from "@/lib/maps";
 import { formatHours, formatPace, titleizeActivityType } from "@/lib/format";
 
@@ -83,6 +84,7 @@ export default function HomePage() {
   const training = getTrainingDashboard();
   const route = getLatestRunRoute();
   const recovery = getRecoveryDashboard();
+  const { freshness } = getSyncStatus();
   const runningWeekSummary = summarizeRunningWeek(currentWeek);
   const last7 = training?.last7;
   const prev7 = training?.prev7;
@@ -113,6 +115,18 @@ export default function HomePage() {
           Summary API
         </Link>
       </div>
+
+      {freshness.stale ? (
+        <div className="stale-banner" role="status">
+          {freshness.lastSuccessAt
+            ? `Garmin data was last synced ${
+                freshness.hoursSince < 48
+                  ? `${Math.round(freshness.hoursSince)} hours`
+                  : `${Math.round(freshness.hoursSince / 24)} days`
+              } ago. Recent activities may be missing.`
+            : "No successful Garmin sync has been recorded yet."}
+        </div>
+      ) : null}
 
       {training ? (
         <>

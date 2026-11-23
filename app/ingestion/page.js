@@ -52,18 +52,18 @@ export default function IngestionPage() {
           <p className="muted">
             {lastSync
               ? `${lastSync.message} ${formatTimestampForDisplay(lastSync.finished_at)} (${lastSync.trigger}).`
-              : "Press the button, or wait for the nightly run."}
+              : "Press the button, or wait for the next hourly run."}
           </p>
         </article>
         <article className="card">
-          <div className="metric-label">Nightly sync</div>
+          <div className="metric-label">Automatic sync</div>
           <div className="metric-value" style={{ fontSize: "1.4rem" }}>
-            {status.nightlyInstalled ? "On" : "Off"}
+            {status.scheduleInstalled ? "On" : "Off"}
           </div>
           <p className="muted">
-            {status.nightlyInstalled
-              ? "Runs every night at midnight. If the Mac is asleep it runs when it wakes."
-              : "Run scripts/install_nightly_sync.sh to sync automatically every night."}
+            {status.scheduleInstalled
+              ? "Runs every hour, at login, and when the Mac wakes."
+              : "Run scripts/install_sync_schedule.sh to sync automatically every hour."}
           </p>
         </article>
         <article className="card">
