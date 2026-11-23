@@ -16,6 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from db_upgrade import apply_schema
 from fit_summary import canonicalize_fit, parse_fit
 
 
@@ -46,8 +47,7 @@ def compute_sha256(filepath):
 
 
 def ensure_schema(connection, schema_path):
-    schema_sql = Path(schema_path).read_text(encoding="utf-8")
-    connection.executescript(schema_sql)
+    apply_schema(connection, schema_path)
 
 
 def start_ingestion_run(connection, source_type, run_mode, notes):
@@ -251,6 +251,11 @@ def insert_activity(connection, athlete_id, source_file_id, activity):
             athlete_id,
             source_file_id,
             source_activity_id,
+            garmin_activity_id,
+            start_time_local,
+            local_date,
+            utc_offset_minutes,
+            utc_offset_source,
             activity_type,
             sport,
             sub_sport,
@@ -272,12 +277,17 @@ def insert_activity(connection, athlete_id, source_file_id, activity):
             training_load,
             device_name
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             athlete_id,
             source_file_id,
-            None,
+            str(activity["garmin_activity_id"]) if activity.get("garmin_activity_id") else None,
+            activity.get("garmin_activity_id"),
+            activity.get("start_time_local"),
+            activity.get("local_date"),
+            activity.get("utc_offset_minutes"),
+            activity.get("utc_offset_source"),
             activity["activity_type"],
             activity["sport"],
             activity["sub_sport"],
@@ -431,7 +441,7 @@ def inspect_fit_file(connection, fit_path, timezone_name):
     activity_type = None
     sport = None
     if canonical is not None and canonical["activity"]["started_at_utc"]:
-        activity_date = iso_to_local_date(
+        activity_date = canonical["activity"].get("local_date") or iso_to_local_date(
             canonical["activity"]["started_at_utc"],
             canonical["activity"]["timezone"] or timezone_name,
         )
@@ -570,6 +580,28 @@ def move_known_duplicate_file(source_path, archive_root):
     return safe_move_file(source_path, destination)
 
 
+def find_duplicate_activity(connection, activity):
+    """Id of an activity we already hold for the same Garmin activity, else None.
+
+    Matches on the Garmin activity ID. Files without one (not named <id>_ACTIVITY.fit) fall back
+    to the same start instant and sport with a near-identical distance.
+    """
+    if activity.get("garmin_activity_id"):
+        row = connection.execute(
+            "SELECT id FROM activities WHERE garmin_activity_id = ?", (activity["garmin_activity_id"],)
+        ).fetchone()
+        if row:
+            return row[0]
+    distance = activity.get("distance_m")
+    for row_id, row_distance in connection.execute(
+        "SELECT id, distance_m FROM activities WHERE started_at_utc = ? AND sport IS ?",
+        (activity["started_at_utc"], activity.get("sport")),
+    ):
+        if distance is None or row_distance is None or abs(row_distance - distance) <= max(10, 0.01 * distance):
+            return row_id
+    return None
+
+
 def import_fit_file(
     connection,
     athlete_id,
@@ -595,6 +627,16 @@ def import_fit_file(
         delete_existing_import(connection, source_file_id)
 
     canonical = canonicalize_fit(fit_path, athlete_timezone=timezone_name)
+    duplicate_of = find_duplicate_activity(connection, canonical["activity"])
+    if duplicate_of is not None:
+        # Same Garmin activity arriving again (re-export, re-download, overlapping backfill): never insert twice.
+        return {
+            "status": "skipped",
+            "source_file_id": source_file_id,
+            "file_hash": file_hash,
+            "canonical": None,
+            "duplicate_of": duplicate_of,
+        }
     activity_id = insert_activity(connection, athlete_id, source_file_id, canonical["activity"])
     insert_laps(connection, activity_id, canonical["laps"])
     insert_samples(connection, activity_id, canonical["samples"])

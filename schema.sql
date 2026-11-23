@@ -102,6 +102,22 @@ CREATE TABLE IF NOT EXISTS activities (
     device_name TEXT,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    garmin_activity_id INTEGER,
+    start_time_local TEXT,
+    local_date TEXT,
+    utc_offset_minutes INTEGER,
+    utc_offset_source TEXT,
+    activity_name TEXT,
+    garmin_type_key TEXT,
+    aerobic_training_effect REAL,
+    anaerobic_training_effect REAL,
+    training_effect_label TEXT,
+    hr_zone1_seconds REAL,
+    hr_zone2_seconds REAL,
+    hr_zone3_seconds REAL,
+    hr_zone4_seconds REAL,
+    hr_zone5_seconds REAL,
+    metrics_fetched_at TEXT,
     FOREIGN KEY (athlete_id) REFERENCES athletes(id),
     FOREIGN KEY (source_file_id) REFERENCES source_files(id)
 );
@@ -282,5 +298,33 @@ CREATE TABLE IF NOT EXISTS wellness_raw (
 
 INSERT OR IGNORE INTO schema_migrations(version)
 VALUES ('0004_wellness');
+
+-- 0005: Garmin IDs, local time, and Garmin's own training metrics.
+-- New activity columns and the unique Garmin-ID index are added by db_upgrade.py (SQLite cannot
+-- ADD COLUMN IF NOT EXISTS). garmin_activity_raw keeps Garmin's original list JSON per activity so
+-- fields can be re-extracted without asking Garmin again. fit_status explains any activity with no
+-- imported FIT: pending, imported, no_original (Garmin has no file for it), or invalid.
+CREATE TABLE IF NOT EXISTS garmin_activity_raw (
+    garmin_activity_id INTEGER PRIMARY KEY,
+    payload TEXT NOT NULL,
+    fit_status TEXT NOT NULL DEFAULT 'pending',
+    fit_status_detail TEXT,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    status_updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+-- One row per day we asked Garmin for wellness data, so "no data" is recorded, not guessed.
+CREATE TABLE IF NOT EXISTS wellness_fetch_log (
+    athlete_id INTEGER NOT NULL,
+    calendar_date TEXT NOT NULL,
+    status TEXT NOT NULL,
+    detail TEXT,
+    fetched_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (athlete_id, calendar_date),
+    FOREIGN KEY (athlete_id) REFERENCES athletes(id)
+);
+
+INSERT OR IGNORE INTO schema_migrations(version)
+VALUES ('0005_garmin_ids_local_time_metrics');
 
 COMMIT;

@@ -14,6 +14,10 @@ SELECT
     a.sub_sport,
     a.started_at_utc,
     a.timezone AS activity_timezone,
+    a.garmin_activity_id,
+    a.start_time_local,
+    a.local_date,
+    a.utc_offset_minutes,
     date(a.started_at_utc) AS activity_date_utc,
     round(a.distance_m / 1609.344, 2) AS distance_miles,
     round(a.duration_seconds / 60.0, 2) AS duration_minutes,
@@ -49,14 +53,14 @@ DROP VIEW IF EXISTS vw_weekly_activity_summary;
 CREATE VIEW vw_weekly_activity_summary AS
 SELECT
     athlete_id,
-    strftime('%Y-W%W', started_at_utc) AS activity_week_utc,
+    strftime('%Y-W%W', COALESCE(local_date, date(started_at_utc))) AS activity_week_local,
     COUNT(*) AS activity_count,
     round(SUM(distance_m) / 1609.344, 2) AS total_miles,
     round(SUM(duration_seconds) / 60.0, 2) AS total_minutes,
     round(AVG(avg_heart_rate_bpm), 1) AS avg_activity_heart_rate_bpm,
     round(AVG(avg_cadence_spm), 1) AS avg_activity_cadence_spm
 FROM activities
-GROUP BY athlete_id, strftime('%Y-W%W', started_at_utc);
+GROUP BY athlete_id, strftime('%Y-W%W', COALESCE(local_date, date(started_at_utc)));
 
 DROP VIEW IF EXISTS vw_activity_sample_rollup;
 CREATE VIEW vw_activity_sample_rollup AS
@@ -129,7 +133,7 @@ LEFT JOIN activities a
 -- SELECT * FROM vw_activity_overview ORDER BY started_at_utc;
 
 -- 2. Weekly mileage trend
--- SELECT * FROM vw_weekly_activity_summary ORDER BY activity_week_utc;
+-- SELECT * FROM vw_weekly_activity_summary ORDER BY activity_week_local;
 
 -- 3. Lap-by-lap splits
 -- SELECT * FROM vw_lap_overview WHERE activity_id = 6 ORDER BY lap_index;

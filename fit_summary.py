@@ -11,11 +11,13 @@ canonical activity, lap, and sample objects for database ingestion.
 
 import argparse
 import json
+import re
 import struct
 import sys
 from math import isnan
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 LACTATE_THRESHOLD_HR = 166
 UTC_OFFSET_HOURS = -6
@@ -33,6 +35,17 @@ FIT_EPOCH = datetime(1989, 12, 31, 0, 0, 0, tzinfo=timezone.utc)
 SESSION_MSG_NUM = 18
 LAP_MSG_NUM = 19
 RECORD_MSG_NUM = 20
+ACTIVITY_MSG_NUM = 34
+
+# activity message: timestamp is UTC, local_timestamp is the same instant on the device's wall clock.
+# Their difference is the UTC offset the activity was actually recorded in (travel, DST included).
+FIELD_ACTIVITY_LOCAL_TIMESTAMP = 5
+# Running cadence is stored per leg (x2 for steps/min) with a fractional part in 1/128 steps.
+FIELD_SESSION_AVG_FRACTIONAL_CADENCE = 92
+FIELD_SESSION_MAX_FRACTIONAL_CADENCE = 93
+
+# Sports whose cadence is reported per leg. Cycling is already rpm, so never doubled.
+FOOT_SPORTS = {"running", "walking", "hiking"}
 
 FIELD_TIMESTAMP = 253
 FIELD_POSITION_LAT = 0
@@ -164,7 +177,7 @@ SUB_SPORT_MAP = {
 }
 
 
-def parse_fit(filepath):
+def parse_fit_all(filepath):
     with open(filepath, "rb") as file_handle:
         raw = file_handle.read()
 
@@ -173,7 +186,7 @@ def parse_fit(filepath):
     pos = header_size
 
     local_defs = {}
-    records, laps, sessions = [], [], []
+    records, laps, sessions, activities = [], [], [], []
 
     def decode_msg(definition, offset):
         message = {}
@@ -272,8 +285,10 @@ def parse_fit(filepath):
                 laps.append(message)
             elif global_num == SESSION_MSG_NUM:
                 sessions.append(message)
+            elif global_num == ACTIVITY_MSG_NUM:
+                activities.append(message)
 
-    return records, laps, sessions
+    return records, laps, sessions, activities
 
 
 def fit_seconds_to_datetime(value):
@@ -311,12 +326,6 @@ def altitude_from_fit(value):
     return (value / 5) - 500
 
 
-def cadence_to_spm(value):
-    if value is None:
-        return None
-    return value * 2
-
-
 def map_sport(value):
     if value is None:
         return None
@@ -350,8 +359,57 @@ def max_value(values):
     return max(present)
 
 
+def parse_fit(filepath):
+    """records, laps, sessions (the original three-value shape)."""
+    records, laps, sessions, _activities = parse_fit_all(filepath)
+    return records, laps, sessions
+
+
+def cadence_to_spm(value, sport=None):
+    """Per-leg cadence -> steps/min for foot sports; unchanged for others (cycling is rpm)."""
+    if value is None:
+        return None
+    return value * 2 if sport in FOOT_SPORTS else value
+
+
+def session_cadence(session, field, fractional_field, sport):
+    """Garmin's own session cadence (authoritative), with the fractional part when present."""
+    base = clean_number(session.get(field), {255})
+    if base is None:
+        return None
+    fraction = clean_number(session.get(fractional_field), {255})
+    if fraction is not None:
+        base = base + fraction / 128
+    return cadence_to_spm(base, sport)
+
+
+def garmin_activity_id_from_name(filepath):
+    match = re.match(r"(\d+)_ACTIVITY", Path(filepath).name)
+    return int(match.group(1)) if match else None
+
+
+def utc_offset_minutes(activity_message):
+    """Offset the device recorded in, from the FIT activity message. None if unavailable or implausible."""
+    if not activity_message:
+        return None
+    utc = activity_message.get(FIELD_TIMESTAMP)
+    local = activity_message.get(FIELD_ACTIVITY_LOCAL_TIMESTAMP)
+    if not isinstance(utc, int) or not isinstance(local, int):
+        return None
+    minutes = (local - utc) / 60
+    if minutes != int(minutes) or abs(minutes) > 14 * 60:
+        return None
+    return int(minutes)
+
+
+def local_fields(start_dt, offset_minutes):
+    """(local start 'YYYY-MM-DDTHH:MM:SS', local calendar date) for a UTC start and offset."""
+    local = start_dt.astimezone(timezone.utc) + timedelta(minutes=offset_minutes)
+    return local.strftime("%Y-%m-%dT%H:%M:%S"), local.strftime("%Y-%m-%d")
+
+
 def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
-    records, laps, sessions = parse_fit(filepath)
+    records, laps, sessions, activities = parse_fit_all(filepath)
     if not sessions:
         raise ValueError(f"No session data found in FIT file: {filepath}")
 
@@ -363,6 +421,9 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
         if start_dt is not None and duration_seconds is not None
         else None
     )
+
+    sport = map_sport(session.get(FIELD_SESSION_SPORT))
+    sub_sport = map_sub_sport(session.get(FIELD_SESSION_SUB_SPORT))
 
     sample_rows = []
     heart_rates = []
@@ -376,7 +437,7 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
             elapsed_seconds = (sample_dt - start_dt).total_seconds()
 
         heart_rate = clean_number(record.get(FIELD_HEART_RATE), {255})
-        cadence_spm = cadence_to_spm(clean_number(record.get(FIELD_CADENCE), {255}))
+        cadence_spm = cadence_to_spm(clean_number(record.get(FIELD_CADENCE), {255}), sport)
         speed_raw = first_non_none(
             clean_number(record.get(FIELD_ENHANCED_SPEED), {65535, 4294967295}),
             clean_number(record.get(FIELD_SPEED), {65535, 4294967295}),
@@ -442,23 +503,26 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
                 "avg_heart_rate_bpm": clean_number(lap.get(FIELD_LAP_AVG_HEART_RATE), {255}),
                 "max_heart_rate_bpm": clean_number(lap.get(FIELD_LAP_MAX_HEART_RATE), {255}),
                 "avg_cadence_spm": cadence_to_spm(
-                    clean_number(lap.get(FIELD_LAP_AVG_CADENCE), {255})
+                    clean_number(lap.get(FIELD_LAP_AVG_CADENCE), {255}), sport
                 ),
                 "lap_type": None,
             }
         )
 
+    # Garmin's own session values are authoritative; sample averages are only a fallback.
     avg_heart_rate = first_non_none(
-        average(heart_rates), session.get(FIELD_SESSION_AVG_HEART_RATE)
+        clean_number(session.get(FIELD_SESSION_AVG_HEART_RATE), {255}), average(heart_rates)
     )
     max_heart_rate = first_non_none(
-        max_value(heart_rates), session.get(FIELD_SESSION_MAX_HEART_RATE)
+        clean_number(session.get(FIELD_SESSION_MAX_HEART_RATE), {255}), max_value(heart_rates)
     )
     avg_cadence = first_non_none(
-        average(cadences), cadence_to_spm(session.get(FIELD_SESSION_AVG_CADENCE))
+        session_cadence(session, FIELD_SESSION_AVG_CADENCE, FIELD_SESSION_AVG_FRACTIONAL_CADENCE, sport),
+        average(cadences),
     )
     max_cadence = first_non_none(
-        max_value(cadences), cadence_to_spm(session.get(FIELD_SESSION_MAX_CADENCE))
+        session_cadence(session, FIELD_SESSION_MAX_CADENCE, FIELD_SESSION_MAX_FRACTIONAL_CADENCE, sport),
+        max_value(cadences),
     )
     avg_speed = first_non_none(
         average(speeds),
@@ -487,8 +551,14 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
         ),
     )
 
-    sport = map_sport(session.get(FIELD_SESSION_SPORT))
-    sub_sport = map_sub_sport(session.get(FIELD_SESSION_SUB_SPORT))
+    # Time zone: the device's own offset for this activity, so travel and DST are exact.
+    # Only if the file lacks it do we assume the athlete's configured zone.
+    offset = utc_offset_minutes(activities[0] if activities else None)
+    offset_source = "fit_activity"
+    if offset is None and start_dt is not None:
+        offset_source = "assumed_tz"
+        offset = int(start_dt.astimezone(ZoneInfo(athlete_timezone)).utcoffset().total_seconds() // 60)
+    start_local, local_date = local_fields(start_dt, offset) if start_dt is not None else (None, None)
 
     return {
         "source_path": str(Path(filepath)),
@@ -496,8 +566,13 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
             "activity_type": sport or "unknown",
             "sport": sport,
             "sub_sport": sub_sport,
+            "garmin_activity_id": garmin_activity_id_from_name(filepath),
             "started_at_utc": to_iso8601(start_dt),
             "ended_at_utc": to_iso8601(end_dt),
+            "start_time_local": start_local,
+            "local_date": local_date,
+            "utc_offset_minutes": offset,
+            "utc_offset_source": offset_source,
             "timezone": athlete_timezone,
             "duration_seconds": duration_seconds,
             "moving_time_seconds": duration_seconds,
