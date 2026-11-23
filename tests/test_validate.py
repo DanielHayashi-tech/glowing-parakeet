@@ -53,6 +53,16 @@ class WeekTests(unittest.TestCase):
         self.assertNotIn(date(2026, 11, 23), totals)  # the current week is not graded
 
 
+class SameValueTests(unittest.TestCase):
+    def test_numbers_strings_and_none(self):
+        self.assertTrue(v.same_value(44, 44.0))
+        self.assertTrue(v.same_value("2026-11-19T06:49:36+00:00", "2026-11-19T06:49:36+00:00"))
+        self.assertTrue(v.same_value(None, None))
+        self.assertFalse(v.same_value(44, 45))
+        self.assertFalse(v.same_value("a", "b"))
+        self.assertFalse(v.same_value(None, 0))
+
+
 class SpotCheckTests(unittest.TestCase):
     def rows(self):
         base = {"duration_seconds": 100, "distance_m": 1, "utc_offset_minutes": -300, "lap_pace_spread": None}

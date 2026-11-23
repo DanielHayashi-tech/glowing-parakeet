@@ -93,6 +93,30 @@ def normalize(payloads):
     }
 
 
+def row_has_data(row):
+    """True if Garmin gave at least one measurement. Garmin answers days before you owned the
+    watch with a well-formed but empty response, which is not data."""
+    return any(value is not None for value in row.values())
+
+
+def cleanup_empty_days(connection, athlete_id):
+    """Turn all-NULL stored days (from before this check existed) into recorded 'empty' days."""
+    columns = [name for name in normalize({}) if name != "hrv_status"] + ["hrv_status"]
+    all_null = " AND ".join(f"{name} IS NULL" for name in columns)
+    days = [
+        row[0]
+        for row in connection.execute(
+            f"SELECT calendar_date FROM wellness_daily WHERE athlete_id = ? AND {all_null}", (athlete_id,)
+        )
+    ]
+    for day in days:
+        connection.execute("DELETE FROM wellness_daily WHERE athlete_id = ? AND calendar_date = ?", (athlete_id, day))
+        connection.execute("DELETE FROM wellness_raw WHERE athlete_id = ? AND calendar_date = ?", (athlete_id, day))
+        log_day(connection, athlete_id, day, "empty")
+    connection.commit()
+    return len(days)
+
+
 def ensure_athlete(connection, display_name, timezone_name):
     row = connection.execute(
         "SELECT id FROM athletes WHERE display_name = ? ORDER BY id LIMIT 1", (display_name,)
@@ -133,7 +157,14 @@ def days_to_fetch(connection, athlete_id, today, window_days=BACKFILL_DAYS, star
         if day >= refresh_from or day.isoformat() not in settled:
             days.append(day)
         day += timedelta(days=1)
-    return days
+    # A day that errored (for example Garmin rate-limited us during a backfill) is retried on every
+    # run, however old it is, so a transient failure can never become a permanent gap.
+    wanted = {day for day in days}
+    for (errored,) in connection.execute(
+        "SELECT calendar_date FROM wellness_fetch_log WHERE athlete_id = ? AND status = 'error'", (athlete_id,)
+    ):
+        wanted.add(date.fromisoformat(errored))
+    return sorted(wanted)
 
 
 def log_day(connection, athlete_id, day_iso, status, detail=None):
@@ -196,6 +227,7 @@ def run(db_path, athlete_name, timezone_name, log, backfill_days=BACKFILL_DAYS, 
         apply_schema(connection, str(SCHEMA_PATH))
         athlete_id = ensure_athlete(connection, athlete_name, timezone_name)
         connection.commit()
+        cleanup_empty_days(connection, athlete_id)
 
         days = days_to_fetch(connection, athlete_id, today, backfill_days, start)
         for number_done, day in enumerate(days, start=1):
@@ -213,7 +245,7 @@ def run(db_path, athlete_name, timezone_name, log, backfill_days=BACKFILL_DAYS, 
                 connection.commit()
                 log(f"wellness {day_iso}: {error}")
                 continue
-            if all(payload is None for payload in payloads.values()):
+            if all(payload is None for payload in payloads.values()) or not row_has_data(normalize(payloads)):
                 # Garmin has nothing for this day: record that, so it is documented rather than guessed.
                 log_day(connection, athlete_id, day_iso, "empty")
                 connection.commit()

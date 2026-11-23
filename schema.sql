@@ -120,6 +120,9 @@ CREATE TABLE IF NOT EXISTS activities (
     metrics_fetched_at TEXT,
     lap_distance_sum_m REAL,
     lap_distance_adjusted INTEGER,
+    fit_distance_m REAL,
+    fit_duration_seconds REAL,
+    garmin_adjusted INTEGER,
     FOREIGN KEY (athlete_id) REFERENCES athletes(id),
     FOREIGN KEY (source_file_id) REFERENCES source_files(id)
 );

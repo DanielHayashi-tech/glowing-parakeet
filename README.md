@@ -103,6 +103,16 @@ more than 3 hours old, the dashboard shows a stale-data banner.
 - **Importing a `.fit` file by hand**: drop it in `raw/garmin/inbox` and run a sync.
   This works even if the Garmin key has stopped working.
 
+## Checking The Data
+
+```bash
+python validate_garmin.py                      # compares the database with Garmin live, writes docs/reports/
+python -m unittest discover -s tests -t .      # unit tests
+```
+
+Details of what was fixed, the rules for where Garmin and the FIT file disagree, and known
+limitations are in `docs/milestone-1-garmin-pipeline.md`.
+
 ## Pages
 
 - `/` dashboard

@@ -29,6 +29,12 @@ ACTIVITY_COLUMNS = {
     # Treadmill distance calibration: laps and records keep the device's raw distance while the
     # session distance (what Garmin Connect shows) is the adjusted one. We keep both and flag it.
     "lap_distance_sum_m": "REAL",
+    # Garmin's servers can hold a different distance/duration than the original FIT (treadmill
+    # calibration, edits in Connect, indoor rides whose FIT has no distance). distance_m and
+    # duration_seconds follow Garmin (what Connect shows); the FIT's own values are kept here.
+    "fit_distance_m": "REAL",
+    "fit_duration_seconds": "REAL",
+    "garmin_adjusted": "INTEGER",
     "lap_distance_adjusted": "INTEGER",
 }
 
@@ -76,7 +82,7 @@ def update_lap_check(connection, activity_id):
     """Record sum(lap distance) and whether it disagrees with the session distance by more than 1%."""
     row = connection.execute(
         """
-        SELECT a.distance_m, (SELECT SUM(distance_m) FROM laps WHERE activity_id = a.id)
+        SELECT COALESCE(a.fit_distance_m, a.distance_m), (SELECT SUM(distance_m) FROM laps WHERE activity_id = a.id)
         FROM activities a WHERE a.id = ?
         """,
         (activity_id,),

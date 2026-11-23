@@ -105,6 +105,16 @@ def weekly_running_miles(entries, weeks, today):
     return totals
 
 
+def same_value(stored, fresh):
+    """Equal, or numerically equal (floats from JSON vs SQLite); strings and None compare exactly."""
+    if stored == fresh:
+        return True
+    numeric = (int, float)
+    if isinstance(stored, numeric) and isinstance(fresh, numeric) and not isinstance(stored, bool) and not isinstance(fresh, bool):
+        return abs(stored - fresh) < 1e-6
+    return False
+
+
 def pick_spot_checks(rows, home_offsets=(-300, -360, -420, -240)):
     """Choose representative activities. rows: dicts with the columns used below.
 
@@ -204,6 +214,12 @@ def check_activities(report, connection, rows, items):
         report.add(label, not bad, f"{len(mine) - len(bad)} of {len(mine)} match Garmin; {len(bad)} differ", [str(i) for i in bad[:20]])
 
     no_metrics = [g for g, r in mine.items() if r["metrics_fetched_at"] is None]
+    adjusted = [g for g, r in mine.items() if r["garmin_adjusted"] == 1]
+    undocumented = [g for g in adjusted if mine[g]["fit_distance_m"] is None or mine[g]["fit_duration_seconds"] is None]
+    report.add("Garmin-adjusted values keep the FIT's original",
+               not undocumented,
+               f"{len(adjusted)} activities where Garmin's distance or duration differs from the FIT (calibration, edits, indoor rides without FIT distance); original FIT values preserved on all but {len(undocumented)}",
+               [str(i) for i in undocumented[:20]])
     report.add("Garmin metrics stored", not no_metrics, f"{len(mine) - len(no_metrics)} of {len(mine)} activities have Garmin's training metrics", [str(i) for i in no_metrics[:20]])
     wrong = [g for g, r in mine.items() if by_id.get(g) and by_id[g].get("aerobicTrainingEffect") is not None
              and (r["aerobic_training_effect"] is None or abs(r["aerobic_training_effect"] - by_id[g]["aerobicTrainingEffect"]) > 0.05)]
@@ -211,7 +227,7 @@ def check_activities(report, connection, rows, items):
     bad_cadence = [g for g, r in mine.items() if (r["avg_cadence_spm"] or 0) > 300]
     report.add("No invalid cadence values (the 510 sentinel)", not bad_cadence, f"{len(bad_cadence)} activities with cadence above 300", [str(i) for i in bad_cadence[:20]])
 
-    unexplained = [g for g, r in mine.items() if r["lap_distance_adjusted"] == 1 and r.get("sub_sport") != "treadmill"]
+    unexplained = [g for g, r in mine.items() if r["lap_distance_adjusted"] == 1 and r.get("sub_sport") != "treadmill" and r["garmin_adjusted"] != 1]
     flagged = [g for g, r in mine.items() if r["lap_distance_adjusted"] == 1]
     report.add("Lap-distance discrepancies explained", not unexplained,
                f"{len(flagged)} activities have laps differing from the session distance by more than 1%; {len(flagged) - len(unexplained)} are treadmill runs (distance calibration), {len(unexplained)} unexplained",
@@ -262,9 +278,7 @@ def check_wellness(report, connection, client, sample, today):
         checked += 1
         for key, value in fresh.items():
             stored_value = row[key]
-            same = (value is None and stored_value is None) or (
-                value is not None and stored_value is not None and abs(float(value) - float(stored_value)) < 1e-6) or value == stored_value
-            if not same:
+            if not same_value(stored_value, value):
                 mismatches.append(f"{day} {key}: stored {stored_value} vs Garmin {value}")
     report.add("Wellness values match a fresh Garmin response", not mismatches,
                f"{checked} sampled days re-fetched from Garmin; {len(mismatches)} field differences", mismatches[:20])

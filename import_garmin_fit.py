@@ -275,9 +275,11 @@ def insert_activity(connection, athlete_id, source_file_id, activity):
             avg_cadence_spm,
             max_cadence_spm,
             training_load,
-            device_name
+            device_name,
+            fit_distance_m,
+            fit_duration_seconds
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             athlete_id,
@@ -308,6 +310,8 @@ def insert_activity(connection, athlete_id, source_file_id, activity):
             activity["max_cadence_spm"],
             activity["training_load"],
             activity["device_name"],
+            activity["distance_m"],
+            activity["duration_seconds"],
         ),
     )
     return cursor.lastrowid

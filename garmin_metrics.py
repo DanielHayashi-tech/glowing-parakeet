@@ -13,7 +13,13 @@ garmin_activity_raw.fit_status makes missing data explicit:
 """
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+
+
+DISTANCE_TOLERANCE = 0.005   # 0.5%
+DISTANCE_MIN_METERS = 10
+DURATION_TOLERANCE_SECONDS = 1
+START_TOLERANCE_SECONDS = 2
 
 
 def number(value):
@@ -59,7 +65,7 @@ def summary_values(item):
 def apply_items(connection, items, now=None):
     """Upsert raw JSON for every item and update matching activities. Returns counts."""
     now = now or datetime.now(timezone.utc).replace(microsecond=0).isoformat()
-    counts = {"items": 0, "activities_updated": 0, "not_imported": 0}
+    counts = {"items": 0, "activities_updated": 0, "not_imported": 0, "garmin_adjusted": 0, "start_corrected": 0}
     for item in items:
         garmin_id = item.get("activityId")
         if not isinstance(garmin_id, int):
@@ -87,10 +93,65 @@ def apply_items(connection, items, now=None):
             f"UPDATE activities SET {assignments}, metrics_fetched_at = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
             [*values.values(), now, row[0]],
         )
+        changed = reconcile_core_values(connection, row[0], item)
+        counts["garmin_adjusted"] += changed["adjusted"]
+        counts["start_corrected"] += changed["start"]
         set_fit_status(connection, garmin_id, "imported")
         counts["activities_updated"] += 1
     connection.commit()
     return counts
+
+
+def reconcile_core_values(connection, row_id, item):
+    """Make distance, duration and start follow Garmin, and keep the FIT's own values.
+
+    Garmin's servers are what Garmin Connect shows, and they can differ from the uploaded FIT
+    (a treadmill distance calibrated after the run, a trimmed activity, an indoor ride whose FIT
+    carries no distance). garmin_adjusted = 1 marks a difference beyond tolerance so analysis can
+    tell; fit_distance_m / fit_duration_seconds keep the original. Returns what changed.
+    """
+    row = connection.execute(
+        "SELECT started_at_utc, distance_m, duration_seconds, fit_distance_m, fit_duration_seconds FROM activities WHERE id = ?",
+        (row_id,),
+    ).fetchone()
+    started, distance, duration, fit_distance, fit_duration = row
+    # First time through, the stored values are still the FIT's own: preserve them.
+    fit_distance = distance if fit_distance is None else fit_distance
+    fit_duration = duration if fit_duration is None else fit_duration
+
+    garmin_distance = number(item.get("distance"))
+    garmin_duration = number(item.get("duration"))
+    adjusted = 0
+    changed = {"start": False}
+    if garmin_distance is not None:
+        if fit_distance is None or abs(garmin_distance - fit_distance) > max(DISTANCE_MIN_METERS, DISTANCE_TOLERANCE * garmin_distance):
+            adjusted = 1
+        distance = garmin_distance
+    if garmin_duration is not None:
+        if fit_duration is None or abs(garmin_duration - fit_duration) > DURATION_TOLERANCE_SECONDS:
+            adjusted = 1
+        duration = garmin_duration
+
+    try:
+        garmin_start = datetime.strptime(item["startTimeGMT"], "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc)
+        if abs((datetime.fromisoformat(started) - garmin_start).total_seconds()) > START_TOLERANCE_SECONDS:
+            started = garmin_start.isoformat()
+            changed["start"] = True
+    except (KeyError, TypeError, ValueError):
+        pass
+    ended = (datetime.fromisoformat(started) + timedelta(seconds=duration)).isoformat() if duration is not None else None
+
+    connection.execute(
+        """
+        UPDATE activities
+        SET started_at_utc = ?, ended_at_utc = COALESCE(?, ended_at_utc), distance_m = ?, duration_seconds = ?,
+            moving_time_seconds = ?, fit_distance_m = ?, fit_duration_seconds = ?, garmin_adjusted = ?
+        WHERE id = ?
+        """,
+        (started, ended, distance, duration, number(item.get("movingDuration")) or duration, fit_distance, fit_duration, adjusted, row_id),
+    )
+    changed["adjusted"] = bool(adjusted)
+    return changed
 
 
 def set_fit_status(connection, garmin_id, status, detail=None):

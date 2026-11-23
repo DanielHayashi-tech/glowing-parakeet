@@ -39,6 +39,13 @@ class DaysToFetchTests(unittest.TestCase):
         self.assertNotIn(date(2026, 11, 13), days)
         self.assertIn(date(2026, 11, 14), days)
 
+    def test_an_old_errored_day_is_retried_even_outside_the_window(self):
+        connection = database()
+        wellness.log_day(connection, 1, "2025-06-22", "error", "HTTP 429")
+        days = wellness.days_to_fetch(connection, 1, TODAY, window_days=10)
+        self.assertIn(date(2025, 6, 22), days)
+        self.assertEqual(days, sorted(days))
+
     def test_days_stored_before_the_log_existed_count_as_settled(self):
         connection = database()
         connection.execute("INSERT INTO wellness_daily(athlete_id, calendar_date) VALUES (1, '2026-11-13')")
@@ -48,6 +55,24 @@ class DaysToFetchTests(unittest.TestCase):
         days = wellness.days_to_fetch(database(), 1, TODAY, start=date(2025, 3, 1))
         self.assertEqual(days[0], date(2025, 3, 1))
         self.assertEqual(len(days), (TODAY - date(2025, 3, 1)).days + 1)
+
+
+class EmptyDayTests(unittest.TestCase):
+    def test_row_has_data(self):
+        self.assertFalse(wellness.row_has_data(wellness.normalize({})))
+        self.assertFalse(wellness.row_has_data(wellness.normalize({"summary": {"includesWellnessData": False, "totalSteps": None}})))
+        self.assertTrue(wellness.row_has_data(wellness.normalize({"summary": {"totalSteps": 0, "restingHeartRate": 50}})))
+
+    def test_cleanup_turns_all_null_days_into_empty_and_keeps_real_days(self):
+        connection = database()
+        connection.execute("INSERT INTO wellness_daily(athlete_id, calendar_date) VALUES (1, '2025-03-10')")
+        connection.execute("INSERT INTO wellness_daily(athlete_id, calendar_date, resting_hr_bpm) VALUES (1, '2025-04-20', 44)")
+        connection.execute("INSERT INTO wellness_raw(athlete_id, calendar_date, kind, payload) VALUES (1, '2025-03-10', 'summary', '{}')")
+        self.assertEqual(wellness.cleanup_empty_days(connection, 1), 1)
+        self.assertEqual([r[0] for r in connection.execute("SELECT calendar_date FROM wellness_daily")], ["2025-04-20"])
+        self.assertEqual(connection.execute("SELECT status FROM wellness_fetch_log WHERE calendar_date = '2025-03-10'").fetchone()[0], "empty")
+        self.assertEqual(connection.execute("SELECT COUNT(*) FROM wellness_raw WHERE calendar_date = '2025-03-10'").fetchone()[0], 0)
+        self.assertEqual(wellness.cleanup_empty_days(connection, 1), 0)  # idempotent
 
 
 class FakeClient:

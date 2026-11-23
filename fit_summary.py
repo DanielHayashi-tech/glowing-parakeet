@@ -59,6 +59,7 @@ FIELD_ENHANCED_SPEED = 73
 FIELD_POWER = 7
 FIELD_TEMPERATURE = 13
 
+FIELD_SESSION_START_TIME = 2
 FIELD_SESSION_SPORT = 5
 FIELD_SESSION_SUB_SPORT = 6
 FIELD_SESSION_TOTAL_TIMER_TIME = 8
@@ -365,6 +366,12 @@ def parse_fit(filepath):
     return records, laps, sessions
 
 
+def session_start_dt(session):
+    """Start of the session. start_time is authoritative: on files without records the session
+    timestamp is the END of the session, and using it shifted the start by the whole duration."""
+    return fit_seconds_to_datetime(first_non_none(session.get(FIELD_SESSION_START_TIME), session.get(FIELD_TIMESTAMP)))
+
+
 def cadence_to_spm(value, sport=None):
     """Per-leg cadence -> steps/min for foot sports; unchanged for others (cycling is rpm)."""
     if value is None:
@@ -414,7 +421,7 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
         raise ValueError(f"No session data found in FIT file: {filepath}")
 
     session = sessions[0]
-    start_dt = fit_seconds_to_datetime(session.get(FIELD_TIMESTAMP))
+    start_dt = session_start_dt(session)
     duration_seconds = scale(session.get(FIELD_SESSION_TOTAL_TIMER_TIME), 1000)
     end_dt = (
         start_dt + timedelta(seconds=duration_seconds)

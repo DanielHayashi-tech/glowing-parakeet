@@ -48,6 +48,14 @@ class LocalTimeTests(unittest.TestCase):
         self.assertEqual(fs.local_fields(before, -360)[0], "2026-03-08T01:30:00")
         self.assertEqual(fs.local_fields(after, -300)[0], "2026-03-08T03:30:00")
 
+    def test_session_start_prefers_start_time_over_timestamp(self):
+        # Files without records carry the END of the session in `timestamp`; start_time is the start.
+        session = {fs.FIELD_SESSION_START_TIME: 1_114_208_700, fs.FIELD_TIMESTAMP: 1_114_211_545}
+        self.assertEqual(fs.session_start_dt(session), fs.fit_seconds_to_datetime(1_114_208_700))
+
+    def test_session_start_falls_back_to_timestamp(self):
+        self.assertEqual(fs.session_start_dt({fs.FIELD_TIMESTAMP: 1_000_000_000}), fs.fit_seconds_to_datetime(1_000_000_000))
+
     def test_garmin_activity_id_from_filename(self):
         self.assertEqual(fs.garmin_activity_id_from_name("raw/garmin/inbox/25053054371_ACTIVITY.fit"), 25053054371)
         self.assertIsNone(fs.garmin_activity_id_from_name("my_run.fit"))

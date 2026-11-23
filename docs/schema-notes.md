@@ -64,6 +64,15 @@ Daily wellness is not an activity, so it has its own tables:
 
 Re-fetching a day updates both tables in place, because today's numbers keep changing and last night's sleep lands in the morning.
 
+## Activity Identity And Garmin Values (migration 0005)
+
+- `garmin_activity_id` is Garmin's own ID, unique in the database.
+- `local_date`, `start_time_local`, `utc_offset_minutes` come from the activity's own offset, so use `local_date` for any "which day" or "which week" question.
+- `distance_m` and `duration_seconds` follow Garmin's servers; `fit_distance_m` and `fit_duration_seconds` keep the FIT's own values and `garmin_adjusted` marks a difference.
+- `aerobic_training_effect`, `anaerobic_training_effect`, `training_load`, `hr_zone1..5_seconds` come from Garmin's activity list.
+- `garmin_activity_raw` keeps the original list JSON and a `fit_status` (pending, imported, no_original, invalid) for every Garmin activity.
+- `wellness_fetch_log` records each wellness day as ok, empty, or error.
+
 ## Migrations
 
 `schema.sql` is idempotent and runs on every import and wellness sync. Structure uses `CREATE TABLE IF NOT EXISTS`. One-off data fixes guard themselves with a `schema_migrations` check so they run once:
