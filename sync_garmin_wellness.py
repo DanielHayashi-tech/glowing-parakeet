@@ -16,6 +16,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import sync_garmin_api as garmin
+from db_upgrade import apply_schema
 
 ENDPOINTS = {
     "summary": "/usersummary-service/usersummary/daily?calendarDate={day}",
@@ -104,18 +105,47 @@ def ensure_athlete(connection, display_name, timezone_name):
     return cursor.lastrowid
 
 
-def days_to_fetch(connection, athlete_id, today, backfill_days=BACKFILL_DAYS):
-    """Oldest day first. Resumes a couple of days before the newest stored day."""
-    newest = connection.execute(
-        "SELECT MAX(calendar_date) FROM wellness_daily WHERE athlete_id = ?", (athlete_id,)
-    ).fetchone()[0]
-    earliest_allowed = today - timedelta(days=backfill_days)
-    if newest:
-        start = max(date.fromisoformat(newest) - timedelta(days=REFRESH_DAYS - 1), earliest_allowed)
-    else:
-        start = earliest_allowed
-    start = min(start, today - timedelta(days=REFRESH_DAYS - 1))
-    return [start + timedelta(days=offset) for offset in range((today - start).days + 1)]
+def days_to_fetch(connection, athlete_id, today, window_days=BACKFILL_DAYS, start=None):
+    """Oldest day first: the recent refresh window, plus any day in range not yet settled.
+
+    A day is settled once it is stored, or Garmin was asked and returned nothing ('empty').
+    Days that errored last time are retried, and days never asked about are fetched, so a
+    backfill is resumable and a steady-state run only costs the refresh window.
+    """
+    first = start or (today - timedelta(days=window_days))
+    settled = {
+        row[0]
+        for row in connection.execute(
+            "SELECT calendar_date FROM wellness_fetch_log WHERE athlete_id = ? AND status IN ('ok', 'empty')",
+            (athlete_id,),
+        )
+    }
+    settled.update(
+        row[0]
+        for row in connection.execute(
+            "SELECT calendar_date FROM wellness_daily WHERE athlete_id = ?", (athlete_id,)
+        )
+    )
+    refresh_from = today - timedelta(days=REFRESH_DAYS - 1)
+    days = []
+    day = first
+    while day <= today:
+        if day >= refresh_from or day.isoformat() not in settled:
+            days.append(day)
+        day += timedelta(days=1)
+    return days
+
+
+def log_day(connection, athlete_id, day_iso, status, detail=None):
+    connection.execute(
+        """
+        INSERT INTO wellness_fetch_log(athlete_id, calendar_date, status, detail, fetched_at)
+        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(athlete_id, calendar_date)
+        DO UPDATE SET status = excluded.status, detail = excluded.detail, fetched_at = CURRENT_TIMESTAMP
+        """,
+        (athlete_id, day_iso, status, detail),
+    )
 
 
 def store_day(connection, athlete_id, day_iso, payloads):
@@ -154,33 +184,43 @@ def fetch_day(client, day_iso):
     return payloads
 
 
-def run(db_path, athlete_name, timezone_name, log, backfill_days=BACKFILL_DAYS, client=None, today=None):
+def run(db_path, athlete_name, timezone_name, log, backfill_days=BACKFILL_DAYS, client=None, today=None, start=None):
     """Fetch and store recent days. Returns a summary dict; raises GarminError only for auth failures."""
     client = client or garmin.GarminClient(os.environ.get("GARMIN_PERSONAL_API_KEY", "").strip(), log=log)
     today = today or date.today()
-    summary = {"days_checked": 0, "days_stored": 0, "days_failed": 0, "first_error": None}
+    summary = {"days_checked": 0, "days_stored": 0, "days_empty": 0, "days_failed": 0, "first_error": None}
 
     connection = sqlite3.connect(db_path)
     try:
         # Idempotent; makes sure the wellness tables exist on databases from before migration 0004.
-        connection.executescript(SCHEMA_PATH.read_text(encoding="utf-8"))
+        apply_schema(connection, str(SCHEMA_PATH))
         athlete_id = ensure_athlete(connection, athlete_name, timezone_name)
         connection.commit()
 
-        for day in days_to_fetch(connection, athlete_id, today, backfill_days):
+        days = days_to_fetch(connection, athlete_id, today, backfill_days, start)
+        for number_done, day in enumerate(days, start=1):
             day_iso = day.isoformat()
             summary["days_checked"] += 1
+            if len(days) > 40 and number_done % 50 == 0:
+                log(f"wellness backfill: {number_done}/{len(days)} days")
             try:
                 payloads = fetch_day(client, day_iso)
             except garmin.GarminError as error:
-                # One bad day should not lose the rest, but remember why.
+                # One bad day should not lose the rest, but remember why; it is retried next run.
                 summary["days_failed"] += 1
                 summary["first_error"] = summary["first_error"] or str(error)
+                log_day(connection, athlete_id, day_iso, "error", str(error))
+                connection.commit()
                 log(f"wellness {day_iso}: {error}")
                 continue
             if all(payload is None for payload in payloads.values()):
-                continue  # Garmin has nothing for this day yet (for example today before sync).
+                # Garmin has nothing for this day: record that, so it is documented rather than guessed.
+                log_day(connection, athlete_id, day_iso, "empty")
+                connection.commit()
+                summary["days_empty"] += 1
+                continue
             store_day(connection, athlete_id, day_iso, payloads)
+            log_day(connection, athlete_id, day_iso, "ok")
             connection.commit()
             summary["days_stored"] += 1
     finally:

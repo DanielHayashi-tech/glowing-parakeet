@@ -164,6 +164,12 @@ def collect_known_names(roots, db_path):
             connection = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
             try:
                 known.update(row[0] for row in connection.execute("SELECT file_name FROM source_files"))
+                known.update(
+                    fit_filename(row[0])
+                    for row in connection.execute(
+                        "SELECT garmin_activity_id FROM garmin_activity_raw WHERE fit_status IN ('no_original', 'invalid')"
+                    )
+                )
             finally:
                 connection.close()
         except sqlite3.Error:
@@ -230,6 +236,10 @@ def run(args, log):
         "dry_run": bool(args.dry_run),
         "files": [],
         "completed_at": datetime.now(timezone.utc).isoformat(),
+        # Internal, for run_sync.py: every list item seen, and activities with no usable FIT.
+        "items": [],
+        "no_original_ids": [],
+        "invalid_ids": [],
     }
     if not args.dry_run:
         inbox.mkdir(parents=True, exist_ok=True)
@@ -250,6 +260,7 @@ def run(args, log):
                 done = True
                 break
             summary["checked"] += 1
+            summary["items"].append(activity)
             name = fit_filename(activity_id)
             if name in known:
                 summary["already_known"] += 1
@@ -268,9 +279,11 @@ def run(args, log):
             fit_bytes = extract_fit(zip_bytes) if zip_bytes else None
             if zip_bytes is None:
                 summary["no_original_file"] += 1
+                summary["no_original_ids"].append(activity_id)
                 log(f"{name}: Garmin has no original file")
             elif fit_bytes is None or not looks_like_fit(fit_bytes):
                 summary["failed"] += 1
+                summary["invalid_ids"].append(activity_id)
                 log(f"{name}: download did not contain a valid FIT file")
             else:
                 write_atomically(inbox / name, fit_bytes)

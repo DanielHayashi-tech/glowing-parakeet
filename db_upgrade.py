@@ -26,7 +26,14 @@ ACTIVITY_COLUMNS = {
     "hr_zone4_seconds": "REAL",
     "hr_zone5_seconds": "REAL",
     "metrics_fetched_at": "TEXT",
+    # Treadmill distance calibration: laps and records keep the device's raw distance while the
+    # session distance (what Garmin Connect shows) is the adjusted one. We keep both and flag it.
+    "lap_distance_sum_m": "REAL",
+    "lap_distance_adjusted": "INTEGER",
 }
+
+LAP_MISMATCH_TOLERANCE = 0.01  # 1%
+LAP_MISMATCH_MIN_METERS = 25
 
 
 def existing_columns(connection, table):
@@ -65,9 +72,45 @@ def fill_garmin_ids(connection):
     return filled
 
 
+def update_lap_check(connection, activity_id):
+    """Record sum(lap distance) and whether it disagrees with the session distance by more than 1%."""
+    row = connection.execute(
+        """
+        SELECT a.distance_m, (SELECT SUM(distance_m) FROM laps WHERE activity_id = a.id)
+        FROM activities a WHERE a.id = ?
+        """,
+        (activity_id,),
+    ).fetchone()
+    if not row or row[1] is None:
+        return
+    session_distance, lap_sum = row
+    adjusted = 0
+    if session_distance and abs(lap_sum - session_distance) > max(
+        LAP_MISMATCH_MIN_METERS, LAP_MISMATCH_TOLERANCE * session_distance
+    ):
+        adjusted = 1
+    connection.execute(
+        "UPDATE activities SET lap_distance_sum_m = ?, lap_distance_adjusted = ? WHERE id = ?",
+        (lap_sum, adjusted, activity_id),
+    )
+
+
+def fill_lap_checks(connection):
+    ids = [
+        row[0]
+        for row in connection.execute(
+            "SELECT id FROM activities WHERE lap_distance_sum_m IS NULL AND EXISTS (SELECT 1 FROM laps WHERE activity_id = activities.id)"
+        )
+    ]
+    for activity_id in ids:
+        update_lap_check(connection, activity_id)
+    return len(ids)
+
+
 def upgrade(connection):
     added = add_missing_columns(connection)
     filled = fill_garmin_ids(connection)
+    lap_checks = fill_lap_checks(connection)
     # One row per Garmin activity, enforced by the database. NULLs (files without an ID) are allowed.
     connection.execute(
         """
@@ -77,7 +120,7 @@ def upgrade(connection):
         """
     )
     connection.commit()
-    return {"columns_added": added, "garmin_ids_filled": filled}
+    return {"columns_added": added, "garmin_ids_filled": filled, "lap_checks_filled": lap_checks}
 
 
 def apply_schema(connection, schema_path="schema.sql"):

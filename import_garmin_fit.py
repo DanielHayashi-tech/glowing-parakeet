@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from db_upgrade import apply_schema
+from db_upgrade import apply_schema, update_lap_check
 from fit_summary import canonicalize_fit, parse_fit
 
 
@@ -639,6 +639,7 @@ def import_fit_file(
         }
     activity_id = insert_activity(connection, athlete_id, source_file_id, canonical["activity"])
     insert_laps(connection, activity_id, canonical["laps"])
+    update_lap_check(connection, activity_id)
     insert_samples(connection, activity_id, canonical["samples"])
     mark_source_file(connection, source_file_id, "imported")
 

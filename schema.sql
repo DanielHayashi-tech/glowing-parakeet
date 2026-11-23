@@ -118,6 +118,8 @@ CREATE TABLE IF NOT EXISTS activities (
     hr_zone4_seconds REAL,
     hr_zone5_seconds REAL,
     metrics_fetched_at TEXT,
+    lap_distance_sum_m REAL,
+    lap_distance_adjusted INTEGER,
     FOREIGN KEY (athlete_id) REFERENCES athletes(id),
     FOREIGN KEY (source_file_id) REFERENCES source_files(id)
 );

@@ -17,6 +17,7 @@ def old_style_database():
             id INTEGER PRIMARY KEY, athlete_id INTEGER, source_file_id INTEGER,
             source_activity_id TEXT, activity_type TEXT, sport TEXT,
             started_at_utc TEXT, distance_m REAL);
+        CREATE TABLE laps (id INTEGER PRIMARY KEY, activity_id INTEGER, distance_m REAL);
         INSERT INTO athletes VALUES (1, 'a');
         INSERT INTO source_files VALUES (1, '111_ACTIVITY.fit'), (2, '222_ACTIVITY.fit'), (3, 'manual.fit');
         INSERT INTO activities (id, athlete_id, source_file_id, activity_type, sport, started_at_utc, distance_m)
@@ -41,7 +42,7 @@ class UpgradeTests(unittest.TestCase):
         connection = old_style_database()
         upgrade.upgrade(connection)
         second = upgrade.upgrade(connection)
-        self.assertEqual(second, {"columns_added": [], "garmin_ids_filled": 0})
+        self.assertEqual(second, {"columns_added": [], "garmin_ids_filled": 0, "lap_checks_filled": 0})
 
     def test_database_rejects_a_second_row_for_the_same_garmin_activity(self):
         connection = old_style_database()
@@ -93,3 +94,17 @@ class DuplicateTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class LapCheckTests(unittest.TestCase):
+    def test_flags_only_when_laps_disagree_with_session_by_more_than_one_percent(self):
+        connection = old_style_database()
+        upgrade.upgrade(connection)
+        # activity 1: 5000 m session, laps total 5020 (0.4%): fine. activity 2: 6000 m, laps 5400 (10%): flagged.
+        connection.executemany("INSERT INTO laps(activity_id, distance_m) VALUES (?, ?)",
+                               [(1, 2500), (1, 2520), (2, 2700), (2, 2700)])
+        self.assertEqual(upgrade.fill_lap_checks(connection), 2)
+        rows = {r[0]: r[1:] for r in connection.execute("select id, lap_distance_sum_m, lap_distance_adjusted from activities")}
+        self.assertEqual(rows[1], (5020, 0))
+        self.assertEqual(rows[2], (5400, 1))
+        self.assertEqual(rows[3], (None, None))  # no laps: nothing to compare
