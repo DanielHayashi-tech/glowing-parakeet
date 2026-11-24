@@ -10,6 +10,7 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import hr_settings
 import workout_structure
 
 METERS_PER_MILE = 1609.344
@@ -430,6 +431,37 @@ def recent_with_structure(connection, rows):
     return entries
 
 
+QUALITY_WINDOW_DAYS = 28
+QUALITY_MAX = 10
+
+
+def quality_sessions(connection, rows, local_today):
+    """Hard or structured runs in the last 28 days, each labeled by where the evidence comes from.
+
+    Garmin-defined workouts are Garmin's; interval patterns and hard efforts are inferred; the athlete's
+    intent is never guessed, so athlete_confirmed is null until something records it."""
+    first_day = (local_today - timedelta(days=QUALITY_WINDOW_DAYS - 1)).isoformat()
+    entries = []
+    for row in sorted(rows, key=lambda r: (r["local_date"], r["started_at_utc"] or ""), reverse=True):
+        if not is_run(row) or row["local_date"] < first_day:
+            continue
+        analysis = workout_structure.analyze(
+            row, workout_structure.load_laps(connection, row["id"]),
+            workout_structure.load_garmin_splits(connection, row["garmin_activity_id"]))
+        entry = workout_structure.quality_entry(row, analysis["structure"])
+        if entry:
+            entries.append(entry)
+    return {
+        "available": True,
+        "window_days": QUALITY_WINDOW_DAYS,
+        "how_to_read": "garmin_workout = Garmin defined it. inferred_intervals = guessed from manual laps. hard_effort_run = heart rate "
+                       "and training effect were high; says nothing about whether it was planned. uncertain = signals disagree. "
+                       "athlete_confirmed is null: nobody has said what these were meant to be.",
+        "sessions": entries[:QUALITY_MAX],
+        "more_not_shown": max(0, len(entries) - QUALITY_MAX),
+    }
+
+
 def build_context(connection, now, local_today, status, recent_limit=DEFAULT_RECENT, local_timezone="local"):
     """The `get_training_context` result. now is a UTC datetime; local_today is the athlete's current local date."""
     recent_limit = max(1, min(int(recent_limit), MAX_RECENT))
@@ -456,8 +488,8 @@ def build_context(connection, now, local_today, status, recent_limit=DEFAULT_REC
     ratio = round(seven / (twenty_eight / 4), 2) if twenty_eight else None
 
     missing = [
-        "Quality sessions (intervals, threshold, tempo) are not classified yet: lap intensity is not parsed, so none are reported.",
         "Garmin's training readiness, training status and recovery time are not available from the Garmin Personal API.",
+        "What a run was meant to be (easy, tempo, race) and how it felt are not recorded; effort labels come from heart rate and Garmin's training effect only.",
     ]
     if undated:
         missing.append(f"{undated} activities have no local date and are excluded from the windows.")
@@ -478,7 +510,8 @@ def build_context(connection, now, local_today, status, recent_limit=DEFAULT_REC
         },
         "weekly_mileage": weekly_breakdown(rows, local_today),
         "recent_long_runs": longest_run_each_week(rows, local_today),
-        "quality_sessions": {"available": False, "reason": missing[0]},
+        "quality_sessions": quality_sessions(connection, rows, local_today),
+        "heart_rate_settings": hr_settings.heart_rate_settings(connection, local_today),
         "recovery": recovery_context(connection, local_today),
         "recent_strength_sessions": [compact_activity(r) for r in recent_strength],
         "recent_activities": recent_with_structure(connection, recent),

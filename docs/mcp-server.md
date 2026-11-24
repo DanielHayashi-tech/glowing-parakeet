@@ -82,6 +82,13 @@ Second read-only tool. Takes a `garmin_activity_id` (shown on every run in `get_
 - 'Sprint' (3x3x0:15@4:25/mi): 9 reps of about 15 s, 8 recoveries, 7 planned steps.
 - Treadmill 2026-11-12: session 7.02 mi vs lap sum 6.25 mi, flagged.
 
+## Quality sessions, effort and heart-rate settings
+
+- `quality_sessions` lists, for the last 28 days, Garmin-defined workouts (`garmin_workout`, source garmin), interval patterns guessed from manual laps (`inferred_intervals`), and runs that were physiologically hard (`hard_effort_run`), plus `uncertain` ones where the signals disagree. `athlete_confirmed` is always null: nothing records what a run was meant to be, and intent is never derived from heart rate.
+- Pace pattern and effort are separate. A pace pattern is `faster_finish_run`, `slower_finish_run` or `steady_run` (from mile splits). Effort is `easy`, `moderate`, `hard` or `unclear`, from Garmin's own zone minutes and training effect: hard needs 20+ minutes in zones 4-5 and aerobic training effect 3.5+ (or anaerobic 2.0+ with 10+ minutes in zones 4-5). If those disagree it says unclear. Runs under 20 minutes or without zone data get no effort.
+- Mile laps that look like GPS errors (a fast mile next to a slow one that average out normally, or one mile at under 60% or over 160% of the typical pace) are marked `suspect` and left out of the pattern. Garmin's values for them are unchanged.
+- `heart_rate_settings` gives zone boundaries, max, resting and threshold HR from the time-in-zone message of the latest run's FIT file, with that run's date, and earlier values from about 1, 3, 6 and 12 months back. Max and threshold HR have changed over the year, resting HR has not, so treat all of them as settings on a date, not current measurements.
+
 ## Limits (workout details)
 
 - Garmin's per-lap workout-step index in the FIT file is always 0, so laps cannot be tied to individual planned steps; it is stored but not trusted.

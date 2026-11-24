@@ -32,7 +32,7 @@ Per-activity detail for any failures is in `temp/validation/` (not committed).
 - **pass** Spot check: treadmill run: activity 25164377515 (treadmill_running) compared with Garmin's activity detail, laps Garmin 16
 - **pass** Spot check: strength session: activity 22934665474 (strength_training) compared with Garmin's activity detail, laps Garmin 1
 - **pass** Spot check: recorded while traveling: activity 24156044040 (running) compared with Garmin's activity detail, laps Garmin 14
-- **pass** Sync is current: last successful sync 0.9 hours ago
+- **pass** Sync is current: last successful sync 0.3 hours ago
 
 ## Weekly running mileage
 

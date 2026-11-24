@@ -66,13 +66,13 @@ class OrdinaryRunTests(unittest.TestCase):
         paces = ["9:10", "9:01", "8:48", "8:43", "8:15", "8:11", "8:06", "7:51", "7:50", "7:33", "7:27"]
         hrs = [127, 132, 136, 141, 144, 147, 150, 152, 157, 168, 163]
         s = ws.analyze(RUN, mile_run(paces, hrs))["structure"]
-        self.assertEqual((s["kind"], s["source"]), ("progression_run", "inferred"))
+        self.assertEqual((s["kind"], s["source"]), ("faster_finish_run", "inferred"))
         self.assertIn("inferred from mile splits", s["summary"])
         self.assertIn("HR", s["summary"])
         self.assertTrue(s["evidence"])
 
     def test_fade_and_steady_are_told_apart_by_the_threshold(self):
-        self.assertEqual(ws.analyze(RUN, mile_run(["8:00"] * 3 + ["8:30"] * 3 + ["9:10"] * 3))["structure"]["kind"], "fade_run")
+        self.assertEqual(ws.analyze(RUN, mile_run(["8:00"] * 3 + ["8:30"] * 3 + ["9:10"] * 3))["structure"]["kind"], "slower_finish_run")
         self.assertEqual(ws.analyze(RUN, mile_run(["8:30", "8:35", "8:28", "8:33", "8:31", "8:36"]))["structure"]["kind"], "steady_run")
 
     def test_a_short_run_gets_no_invented_structure(self):
@@ -404,6 +404,113 @@ class ContextIntegrationTests(unittest.TestCase):
         db = database()
         add_activity(db, 6, laps=[], local_date="2026-11-20", started_at_utc="2026-11-20T13:00:00+00:00")
         self.assertEqual(self.build(db)["recent_activities"][0]["structure"]["kind"], "no_lap_data")
+
+
+EASY_BODY = {"hr_zone1_seconds": 200, "hr_zone2_seconds": 3000, "hr_zone3_seconds": 600, "hr_zone4_seconds": 0, "hr_zone5_seconds": 0,
+             "aerobic_training_effect": 2.9, "anaerobic_training_effect": 0.4, "duration_seconds": 3800}
+HARD_BODY = {"hr_zone1_seconds": 100, "hr_zone2_seconds": 800, "hr_zone3_seconds": 1600, "hr_zone4_seconds": 2200, "hr_zone5_seconds": 480,
+             "aerobic_training_effect": 4.6, "anaerobic_training_effect": 0.1, "duration_seconds": 5200}
+
+
+class EffortAndGlitchTests(unittest.TestCase):
+    FASTER = ["9:24", "9:20", "9:05", "8:50", "8:40", "8:30", "8:22"]
+
+    def test_an_easy_run_with_a_faster_finish_is_not_a_hard_workout(self):
+        out = ws.analyze({**RUN, **EASY_BODY}, mile_run(self.FASTER, [116, 118, 121, 124, 127, 130, 132]))["structure"]
+        self.assertEqual(out["kind"], "faster_finish_run")
+        self.assertEqual(out["effort"]["level"], "easy")
+        self.assertIsNone(ws.quality_entry({"garmin_activity_id": 1, "local_date": "d", "distance_m": 7 * MI}, out))
+
+    def test_the_same_pattern_with_high_heart_rate_is_a_hard_effort_but_intent_stays_unknown(self):
+        out = ws.analyze({**RUN, **HARD_BODY}, mile_run(["9:03", "8:50", "8:40", "8:30", "8:20", "8:10", "7:57"]))["structure"]
+        self.assertEqual(out["effort"]["level"], "hard")
+        self.assertEqual(out["effort"]["source"], "inferred")
+        self.assertIsNone(out["athlete_intent"])
+        entry = ws.quality_entry({"garmin_activity_id": 2, "local_date": "d", "distance_m": 10 * MI}, out)
+        self.assertEqual(entry["category"], "hard_effort_run")
+        self.assertIsNone(entry["athlete_confirmed"])
+        self.assertEqual(entry["effort"], "hard")
+
+    def test_signals_that_disagree_are_reported_as_unclear(self):
+        body = {**HARD_BODY, "aerobic_training_effect": 2.5}
+        out = ws.analyze({**RUN, **body}, mile_run(["8:30"] * 6))["structure"]
+        self.assertEqual(out["effort"]["level"], "unclear")
+        self.assertEqual(ws.quality_entry({"garmin_activity_id": 3, "local_date": "d", "distance_m": 6 * MI}, out)["category"], "uncertain")
+
+    def test_missing_zone_data_means_no_effort_claim(self):
+        self.assertIsNone(ws.analyze(RUN, mile_run(["8:30"] * 6))["structure"]["effort"])
+
+    def test_a_gps_glitch_pair_is_flagged_kept_and_left_out_of_the_pattern(self):
+        paces = ["10:34", "10:03", "9:58", "10:06", "9:56", "9:49", "9:41", "5:38", "12:44", "9:08"]
+        out = ws.analyze(RUN, mile_run(paces))
+        self.assertEqual(out["structure"]["kind"], "steady_run" if False else out["structure"]["kind"])
+        self.assertNotEqual(out["structure"]["kind"], "slower_finish_run")
+        self.assertIn("gps_glitch_laps", out["structure"]["flags"])
+        views = {l["n"]: ws.lap_view(l) for l in out["laps"]}
+        self.assertIn("suspect", views[8])
+        self.assertIn("suspect", views[9])
+        self.assertNotIn("suspect", views[7])
+        self.assertEqual(views[8]["pace"], "5:38")                 # Garmin's value is untouched
+
+    def test_real_variation_is_not_called_a_glitch(self):
+        out = ws.analyze(RUN, mile_run(["9:00", "8:50", "8:40", "8:30", "8:20", "8:10", "7:57"]))
+        self.assertNotIn("gps_glitch_laps", out["structure"]["flags"])
+
+    def test_garmin_workouts_and_inferred_intervals_get_their_own_categories(self):
+        garmin = ws.analyze({**RUN, "workout_name": "Threshold"}, GarminStructuredTests().workout())["structure"]
+        inferred = ws.analyze(RUN, manual_workout())["structure"]
+        a = {"garmin_activity_id": 1, "local_date": "d", "distance_m": 10 * MI}
+        self.assertEqual(ws.quality_entry(a, garmin)["category"], "garmin_workout")
+        self.assertEqual(ws.quality_entry(a, garmin)["source"], "garmin")
+        self.assertEqual(ws.quality_entry(a, inferred)["category"], "inferred_intervals")
+        self.assertEqual(ws.quality_entry(a, inferred)["source"], "inferred")
+
+
+class QualityInContextTests(unittest.TestCase):
+    def test_quality_sessions_is_available_and_lists_only_notable_runs(self):
+        import training_context as tc
+        from datetime import date, datetime, timezone
+        db = database()
+        add_activity(db, 1, laps=manual_workout(), local_date="2026-11-20", started_at_utc="2026-11-20T13:00:00+00:00")
+        add_activity(db, 2, laps=mile_run(["9:00"] * 7), local_date="2026-11-19", started_at_utc="2026-11-19T13:00:00+00:00", **{
+            k: v for k, v in EASY_BODY.items()})
+        add_activity(db, 3, laps=mile_run(["8:30"] * 7), local_date="2026-11-18", started_at_utc="2026-11-18T13:00:00+00:00", **HARD_BODY)
+        out = tc.build_context(db, datetime(2026, 11, 21, 18, 0, tzinfo=timezone.utc), date(2026, 11, 21), None)
+        quality = out["quality_sessions"]
+        self.assertTrue(quality["available"])
+        by_id = {e["garmin_activity_id"]: e for e in quality["sessions"]}
+        self.assertEqual(set(by_id), {1, 3})
+        self.assertEqual(by_id[1]["category"], "inferred_intervals")
+        self.assertEqual(by_id[3]["category"], "hard_effort_run")
+        self.assertTrue(all(e["athlete_confirmed"] is None for e in quality["sessions"]))
+        self.assertFalse(any("not classified yet" in m or "lap intensity is not parsed" in m for m in out["missing"]))
+
+
+class HeartRateSettingsTests(unittest.TestCase):
+    def test_missing_file_gives_none_not_a_crash(self):
+        import hr_settings
+        self.assertIsNone(hr_settings.read_settings("/nonexistent/file.fit"))
+
+    def test_block_carries_source_date_history_and_a_caution(self):
+        import hr_settings
+        from datetime import date
+        db = database()
+        for gid, day, threshold, path in ((1, "2026-11-20", 169, "a"), (2, "2026-08-01", 171, "b")):
+            db.execute("INSERT OR IGNORE INTO data_sources(id, source_type, source_name) VALUES (1, 'fit', 'test')")
+            sid = db.execute("INSERT INTO source_files(data_source_id, file_name, file_path, file_hash) VALUES (1, ?, ?, ?)", (path, path, path)).lastrowid
+            add_activity(db, gid, local_date=day, source_file_id=sid, started_at_utc=day + "T13:00:00+00:00")
+        values = {"a": {"max_hr": 191, "resting_hr": 44, "threshold_hr": 169, "zone_boundaries_bpm": [96, 115, 134, 153, 172, 191], "zone_basis": "x"},
+                  "b": {"max_hr": 193, "resting_hr": 44, "threshold_hr": 171, "zone_boundaries_bpm": [96, 115, 134, 153, 172, 193], "zone_basis": "x"}}
+        original = hr_settings.read_settings
+        hr_settings.read_settings = lambda path: values.get(path)
+        try:
+            block = hr_settings.heart_rate_settings(db, date(2026, 11, 21))
+        finally:
+            hr_settings.read_settings = original
+        self.assertEqual(block["from"], {"garmin_activity_id": 1, "local_date": "2026-11-20"})
+        self.assertEqual(block["threshold_hr"], 169)
+        self.assertEqual(block["earlier_values"][0]["threshold_hr"], 171)
+        self.assertIn("not necessarily current", block["caution"])
 
 
 if __name__ == "__main__":

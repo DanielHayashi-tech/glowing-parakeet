@@ -43,6 +43,15 @@ PROGRESSION_SECONDS = 20            # last third faster (progression) or slower 
 MIN_MILE_SPLITS = 5
 MILE_LAP_RANGE = (0.95, 1.05)       # a distance-triggered lap this long counts as a mile split
 LONG_RUN_FOR_SUMMARY_MILES = 6
+GLITCH_PAIR_DEVIATION = 0.20        # two neighbouring miles off by this much in opposite directions...
+GLITCH_PAIR_BALANCE = 0.08          # ...whose combined pace is within this share of the typical mile: GPS error
+GLITCH_SINGLE_FAST, GLITCH_SINGLE_SLOW = 0.60, 1.60   # a lone mile this far from the typical mile is suspect
+# Physiological effort (Garmin's own zone minutes and training effect), never workout intent.
+EFFORT_HARD_ZONE45_MINUTES = 20     # minutes in zones 4-5 (153+ bpm with the current zones)
+EFFORT_HARD_MIN_TE = 3.5            # and Garmin aerobic training effect at least this, or anaerobic >= 2.0 with 10 min in zones 4-5
+EFFORT_MODERATE_ZONE45_MINUTES = 8
+EFFORT_MODERATE_TE = 3.5
+EFFORT_MIN_RUN_MINUTES = 20         # shorter runs are not assessed
 PAUSE_GAP_SECONDS = 10              # a gap this long between records means the timer was paused
 
 
@@ -139,6 +148,8 @@ def lap_view(lap):
     }
     if "segment" in lap:
         view["segment"] = lap["segment"]
+    if lap.get("suspect_gps"):
+        view["suspect"] = "possible GPS error or stop: pace not representative (values are Garmin's, unchanged)"
     return view
 
 
@@ -414,8 +425,65 @@ def mile_laps(laps):
     return [l for l in laps if l["trigger"] == "distance" and l["distance_m"] and low <= l["distance_m"] / METERS_PER_MILE <= high and l["pace_s"]]
 
 
+def flag_gps_outliers(splits):
+    """Mark mile laps whose pace is not believable. Garmin's numbers are kept; they are only marked and set aside.
+
+    A GPS jump shows up as one mile too fast next to one too slow whose average is normal, or as a single
+    absurdly fast or slow mile."""
+    paces = sorted(s["pace_s"] for s in splits)
+    if len(paces) < MIN_MILE_SPLITS:
+        return []
+    typical = paces[len(paces) // 2]
+    flagged = set()
+    for first, second in zip(splits, splits[1:]):
+        a, b = first["pace_s"] / typical - 1, second["pace_s"] / typical - 1
+        if a * b < 0 and abs(a) >= GLITCH_PAIR_DEVIATION and abs(b) >= GLITCH_PAIR_DEVIATION \
+                and abs((first["pace_s"] + second["pace_s"]) / 2 / typical - 1) <= GLITCH_PAIR_BALANCE:
+            flagged |= {first["n"], second["n"]}
+    for lap in splits:
+        ratio = lap["pace_s"] / typical
+        if ratio <= GLITCH_SINGLE_FAST or ratio >= GLITCH_SINGLE_SLOW:
+            flagged.add(lap["n"])
+    return sorted(flagged)
+
+
+def effort_assessment(activity):
+    """How hard the run was for the body, from Garmin's zone minutes and training effect. Not intent.
+
+    Returns None when there is not enough to judge. 'unclear' means the signals disagree."""
+    zones = [activity.get(f"hr_zone{z}_seconds") for z in range(1, 6)]
+    if any(z is None for z in zones) or (activity.get("duration_seconds") or 0) < EFFORT_MIN_RUN_MINUTES * 60:
+        return None
+    aerobic, anaerobic = activity.get("aerobic_training_effect"), activity.get("anaerobic_training_effect")
+    if aerobic is None:
+        return None
+    zone45 = (zones[3] + zones[4]) / 60
+    evidence = [f"{round(zone45)} min in heart-rate zones 4-5", f"Garmin aerobic training effect {aerobic:.1f}"
+                + (f", anaerobic {anaerobic:.1f}" if anaerobic else "")]
+    hard_zones = zone45 >= EFFORT_HARD_ZONE45_MINUTES
+    anaerobic_hard = (anaerobic or 0) >= 2.0 and zone45 >= 10
+    if (hard_zones and aerobic >= EFFORT_HARD_MIN_TE) or anaerobic_hard:
+        level = "hard"
+    elif hard_zones or (aerobic >= 4.0 and zone45 < EFFORT_MODERATE_ZONE45_MINUTES):
+        level = "unclear"
+        evidence.append("zone minutes and training effect disagree")
+    elif zone45 >= EFFORT_MODERATE_ZONE45_MINUTES or aerobic >= EFFORT_MODERATE_TE:
+        level = "moderate"
+    else:
+        level = "easy"
+    return {"level": level, "source": "inferred", "evidence": evidence,
+            "note": "physiological effort only; whether it was planned, a race or a workout is not known"}
+
+
 def split_pattern(laps, total_miles):
     splits = mile_laps(laps)
+    if len(splits) < MIN_MILE_SPLITS:
+        return None
+    suspect = flag_gps_outliers(splits)
+    for lap in laps:
+        if lap["n"] in suspect:
+            lap["suspect_gps"] = True
+    splits = [s for s in splits if s["n"] not in suspect]
     if len(splits) < MIN_MILE_SPLITS:
         return None
     third = max(1, len(splits) // 3)
@@ -429,18 +497,19 @@ def split_pattern(laps, total_miles):
         lap["role_source"] = "inferred"
     paces = [s["pace_s"] for s in splits]
     if change >= PROGRESSION_SECONDS:
-        kind, label = "progression_run", f"Progression run: miles {mmss(splits[0]["pace_s"])} -> {mmss(splits[-1]["pace_s"])}/mi over {len(splits)} mile splits{hr_text}"
+        kind, label = "faster_finish_run", f"Faster finish: miles {mmss(splits[0]["pace_s"])} -> {mmss(splits[-1]["pace_s"])}/mi over {len(splits)} mile splits{hr_text}"
     elif change <= -PROGRESSION_SECONDS:
-        kind, label = "fade_run", f"Slowed late: miles {mmss(splits[0]["pace_s"])} -> {mmss(splits[-1]["pace_s"])}/mi over {len(splits)} mile splits{hr_text}"
+        kind, label = "slower_finish_run", f"Slower finish: miles {mmss(splits[0]["pace_s"])} -> {mmss(splits[-1]["pace_s"])}/mi over {len(splits)} mile splits{hr_text}"
     else:
         kind, label = "steady_run", f"Even pace: mile splits {mmss(min(paces))}-{mmss(max(paces))}/mi{hr_text}"
     return {
         "kind": kind,
         "source": "inferred",
         "summary": label + " - inferred from mile splits",
-        "evidence": [f"{len(splits)} distance-triggered mile laps", f"first third {mmss(first_pace)}/mi vs last third {mmss(last_pace)}/mi"],
+        "evidence": [f"{len(splits)} distance-triggered mile laps", f"first third {mmss(first_pace)}/mi vs last third {mmss(last_pace)}/mi"]
+        + ([f"laps {', '.join(map(str, suspect))} look like GPS errors and were left out of this pattern"] if suspect else []),
         "reps": None,
-        "flags": [],
+        "flags": ["gps_glitch_laps"] if suspect else [],
     }
 
 
@@ -479,18 +548,62 @@ def analyze(activity, lap_rows, garmin_splits=None):
                 for lap in laps:
                     lap["role"], lap["role_source"] = "unlabeled", None
     structure["flags"] = sorted(set(structure["flags"]) | set(flags_common))
+    effort = effort_assessment(activity)
+    structure["effort"] = effort
+    structure["athlete_intent"] = None          # only the athlete can say; never derived from physiology
+    if effort and structure["summary"] and structure["kind"] in PATTERN_KINDS:
+        structure["summary"] += f"; effort {effort['level']}"
     if "lap_distances_unreliable" in structure["flags"] and structure["summary"]:
         structure["summary"] += " (raw lap distances do not add up to the session distance: paces approximate)"
     return {"structure": structure, "laps": laps}
 
 
+PATTERN_KINDS = ("faster_finish_run", "slower_finish_run", "steady_run")
+
+
 def compact_structure(structure, distance_m):
     """The short version for get_training_context: a summary only when there is something to say."""
-    if structure["kind"] in ("garmin_structured_workout", "inferred_intervals", "progression_run", "fade_run"):
-        return {"kind": structure["kind"], "source": structure["source"], "summary": structure["summary"]}
-    if structure["kind"] == "steady_run" and (distance_m or 0) / METERS_PER_MILE >= LONG_RUN_FOR_SUMMARY_MILES:
-        return {"kind": structure["kind"], "source": structure["source"], "summary": structure["summary"]}
-    return {"kind": structure["kind"], "source": structure["source"], "summary": None}
+    effort = (structure.get("effort") or {}).get("level")
+    short = {"kind": structure["kind"], "source": structure["source"], "summary": None}
+    if effort:
+        short["effort"] = effort
+    if structure["kind"] in ("garmin_structured_workout", "inferred_intervals", "faster_finish_run", "slower_finish_run"):
+        short["summary"] = structure["summary"]
+    elif structure["kind"] == "steady_run" and (distance_m or 0) / METERS_PER_MILE >= LONG_RUN_FOR_SUMMARY_MILES:
+        short["summary"] = structure["summary"]
+    return short
+
+
+def quality_entry(activity, structure):
+    """A quality_sessions line for one run, or None for an ordinary easy or moderate run.
+
+    category says where the evidence comes from: Garmin's own workout, a pattern inferred from laps, or only the
+    body's effort. athlete_confirmed is always null here: nothing records what the athlete meant to do."""
+    kind, source = structure["kind"], structure["source"]
+    effort = structure.get("effort") or {}
+    if kind == "garmin_structured_workout":
+        category, certainty = "garmin_workout", "defined by Garmin"
+    elif kind == "inferred_intervals":
+        category, certainty = "inferred_intervals", "inferred from manual laps, not confirmed"
+    elif effort.get("level") == "hard":
+        category, certainty = "hard_effort_run", "effort inferred from heart rate and training effect; intent unknown"
+    elif kind == "manual_laps_unclear" or effort.get("level") == "unclear":
+        category, certainty = "uncertain", "signals disagree or lap pattern is unclear"
+    else:
+        return None
+    entry = {
+        "garmin_activity_id": activity["garmin_activity_id"],
+        "local_date": activity["local_date"],
+        "distance_miles": miles(activity["distance_m"]),
+        "category": category,
+        "source": source or "inferred",
+        "athlete_confirmed": None,
+        "effort": effort.get("level"),
+        "why": (structure.get("summary") or "").split("; effort")[0].split(" - inferred")[0] or certainty,
+    }
+    if effort.get("evidence"):
+        entry["effort_evidence"] = effort["evidence"][0]
+    return entry
 
 
 # ---------- database access and the details tool ----------

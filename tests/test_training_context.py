@@ -138,11 +138,12 @@ class MissingVersusZeroTests(unittest.TestCase):
         self.assertIsNone(w["heart_rate_zone_minutes"])
         self.assertIsNone(context(db)["training_load"]["last_7_days_miles_vs_28_day_weekly_average"])
 
-    def test_quality_sessions_are_reported_unavailable(self):
+    def test_quality_sessions_are_available_and_gaps_are_still_stated(self):
         out = context(database())
-        self.assertFalse(out["quality_sessions"]["available"])
-        self.assertTrue(any("Quality sessions" in m for m in out["missing"]))
+        self.assertTrue(out["quality_sessions"]["available"])
+        self.assertEqual(out["quality_sessions"]["sessions"], [])
         self.assertTrue(any("readiness" in m for m in out["missing"]))
+        self.assertTrue(any("meant to be" in m for m in out["missing"]))
 
     def test_undated_activities_are_called_out(self):
         db = database()

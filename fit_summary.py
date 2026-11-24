@@ -193,7 +193,8 @@ SUB_SPORT_MAP = {
 }
 
 
-ParsedFit = namedtuple("ParsedFit", "records laps sessions activities workouts workout_steps")
+ParsedFit = namedtuple("ParsedFit", "records laps sessions activities workouts workout_steps time_in_zone", defaults=([],))
+TIME_IN_ZONE_MSG_NUM = 216
 
 
 def parse_fit_all(filepath):
@@ -205,7 +206,7 @@ def parse_fit_all(filepath):
     pos = header_size
 
     local_defs = {}
-    records, laps, sessions, activities, workouts, workout_steps = [], [], [], [], [], []
+    records, laps, sessions, activities, workouts, workout_steps, time_in_zone = [], [], [], [], [], [], []
 
     def decode_msg(definition, offset):
         message = {}
@@ -310,8 +311,10 @@ def parse_fit_all(filepath):
                 workouts.append(message)
             elif global_num == WORKOUT_STEP_MSG_NUM:
                 workout_steps.append(message)
+            elif global_num == TIME_IN_ZONE_MSG_NUM:
+                time_in_zone.append(message)
 
-    return ParsedFit(records, laps, sessions, activities, workouts, workout_steps)
+    return ParsedFit(records, laps, sessions, activities, workouts, workout_steps, time_in_zone)
 
 
 def fit_seconds_to_datetime(value):
