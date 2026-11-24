@@ -23,15 +23,16 @@ Per-activity detail for any failures is in `temp/validation/` (not committed).
 - **pass** Training effect matches Garmin: 0 differ
 - **pass** No invalid cadence values (the 510 sentinel): 0 activities with cadence above 300
 - **pass** Lap-distance discrepancies explained: 21 activities have laps differing from the session distance by more than 1%; 21 are treadmill runs (distance calibration), 0 unexplained
+- **pass** Lap counts match Garmin: 360 of 360 runs have the same number of laps as Garmin's lapCount
+- **pass** Garmin-defined workout structure matches Garmin's split summary: 33 of 33 Garmin-defined workouts have the same number of intervals and recoveries as Garmin's own summary
 - **pass** Weekly running mileage (last 8 Monday-Sunday weeks): 8 of 8 weeks agree within 0.05 mi
 - **pass** Wellness coverage: 2025-04-05 to 2026-11-23: 598 days stored, 35 recorded as no data, 0 unaccounted for, 0 errored
-- **pass** Wellness values match a fresh Garmin response: 6 sampled days re-fetched from Garmin; 0 field differences
 - **pass** Spot check: long run: activity 21515165264 (running) compared with Garmin's activity detail, laps Garmin 27
 - **pass** Spot check: interval-like run (derived from lap pace variation): activity 22132297404 (running) compared with Garmin's activity detail, laps Garmin 34
 - **pass** Spot check: treadmill run: activity 25164377515 (treadmill_running) compared with Garmin's activity detail, laps Garmin 16
 - **pass** Spot check: strength session: activity 22934665474 (strength_training) compared with Garmin's activity detail, laps Garmin 1
 - **pass** Spot check: recorded while traveling: activity 24156044040 (running) compared with Garmin's activity detail, laps Garmin 14
-- **pass** Sync is current: last successful sync 0.0 hours ago
+- **pass** Sync is current: last successful sync 0.3 hours ago
 
 ## Weekly running mileage
 

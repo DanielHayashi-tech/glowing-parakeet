@@ -13,6 +13,7 @@ import argparse
 import json
 import re
 import struct
+from collections import namedtuple
 import sys
 from math import isnan
 from datetime import datetime, timedelta, timezone
@@ -36,6 +37,20 @@ SESSION_MSG_NUM = 18
 LAP_MSG_NUM = 19
 RECORD_MSG_NUM = 20
 ACTIVITY_MSG_NUM = 34
+WORKOUT_MSG_NUM = 26
+WORKOUT_STEP_MSG_NUM = 27
+
+# Lap fields that describe how the lap was started and what it was for.
+FIELD_LAP_INTENSITY = 23
+FIELD_LAP_TRIGGER = 24
+FIELD_LAP_WKT_STEP_INDEX = 39      # present, but Garmin writes 0 for every lap we have seen
+
+INTENSITY_NAMES = {0: "active", 1: "rest", 2: "warmup", 3: "cooldown", 4: "recovery", 5: "interval", 6: "other"}
+LAP_TRIGGER_NAMES = {0: "manual", 1: "time", 2: "distance", 3: "position_start", 4: "position_lap",
+                     5: "position_waypoint", 6: "position_marked", 7: "session_end", 8: "fitness_equipment"}
+STEP_DURATION_TYPES = {0: "time", 1: "distance", 2: "heart_rate_less_than", 3: "heart_rate_greater_than",
+                       4: "calories", 5: "open", 6: "repeat_until_steps_complete"}
+STEP_TARGET_TYPES = {0: "speed", 1: "heart_rate", 2: "open", 3: "cadence", 4: "power"}
 
 # activity message: timestamp is UTC, local_timestamp is the same instant on the device's wall clock.
 # Their difference is the UTC offset the activity was actually recorded in (travel, DST included).
@@ -178,6 +193,10 @@ SUB_SPORT_MAP = {
 }
 
 
+ParsedFit = namedtuple("ParsedFit", "records laps sessions activities workouts workout_steps time_in_zone", defaults=([],))
+TIME_IN_ZONE_MSG_NUM = 216
+
+
 def parse_fit_all(filepath):
     with open(filepath, "rb") as file_handle:
         raw = file_handle.read()
@@ -187,7 +206,7 @@ def parse_fit_all(filepath):
     pos = header_size
 
     local_defs = {}
-    records, laps, sessions, activities = [], [], [], []
+    records, laps, sessions, activities, workouts, workout_steps, time_in_zone = [], [], [], [], [], [], []
 
     def decode_msg(definition, offset):
         message = {}
@@ -288,8 +307,14 @@ def parse_fit_all(filepath):
                 sessions.append(message)
             elif global_num == ACTIVITY_MSG_NUM:
                 activities.append(message)
+            elif global_num == WORKOUT_MSG_NUM:
+                workouts.append(message)
+            elif global_num == WORKOUT_STEP_MSG_NUM:
+                workout_steps.append(message)
+            elif global_num == TIME_IN_ZONE_MSG_NUM:
+                time_in_zone.append(message)
 
-    return records, laps, sessions, activities
+    return ParsedFit(records, laps, sessions, activities, workouts, workout_steps, time_in_zone)
 
 
 def fit_seconds_to_datetime(value):
@@ -362,8 +387,39 @@ def max_value(values):
 
 def parse_fit(filepath):
     """records, laps, sessions (the original three-value shape)."""
-    records, laps, sessions, _activities = parse_fit_all(filepath)
-    return records, laps, sessions
+    parsed = parse_fit_all(filepath)
+    return parsed.records, parsed.laps, parsed.sessions
+
+
+def code_name(names, value, invalid=()):
+    """Readable name for a Garmin enum code; unknown codes are kept as code_N, never dropped."""
+    if value is None or value in invalid:
+        return None
+    return names.get(value, f"code_{value}")
+
+
+def clean_text(value):
+    return value.strip() if isinstance(value, str) and value.strip() else None
+
+
+def clean_workout_step(step):
+    """One planned step of a Garmin workout. Values stay as Garmin wrote them: duration_value is
+    milliseconds for time, centimetres for distance, and for a repeat step it is the step to loop
+    back to (target_value is then the number of repeats). Speed targets are millimetres/second."""
+    duration_type = code_name(STEP_DURATION_TYPES, step.get(1), {255})
+    return {
+        "step_index": step.get(254),
+        "name": clean_text(step.get(0)),
+        "intensity": code_name(INTENSITY_NAMES, step.get(7), {255}),
+        "duration_type": duration_type,
+        "duration_value": clean_number(step.get(2), {4294967295}),
+        "target_type": code_name(STEP_TARGET_TYPES, step.get(3), {255}),
+        "target_value": clean_number(step.get(4), {4294967295}),
+        "target_low": clean_number(step.get(5), {4294967295}),
+        "target_high": clean_number(step.get(6), {4294967295}),
+        "repeat_from_step": clean_number(step.get(2), {4294967295}) if duration_type == "repeat_until_steps_complete" else None,
+        "repeat_count": clean_number(step.get(4), {4294967295}) if duration_type == "repeat_until_steps_complete" else None,
+    }
 
 
 def session_start_dt(session):
@@ -416,7 +472,8 @@ def local_fields(start_dt, offset_minutes):
 
 
 def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
-    records, laps, sessions, activities = parse_fit_all(filepath)
+    parsed = parse_fit_all(filepath)
+    records, laps, sessions, activities = parsed.records, parsed.laps, parsed.sessions, parsed.activities
     if not sessions:
         raise ValueError(f"No session data found in FIT file: {filepath}")
 
@@ -513,6 +570,12 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
                     clean_number(lap.get(FIELD_LAP_AVG_CADENCE), {255}), sport
                 ),
                 "lap_type": None,
+                # Garmin's own labels for the lap, kept as recorded. For ordinary runs every
+                # auto lap is labelled "interval" with trigger "distance", so the label alone
+                # does not mean a workout; workout_structure.py decides what is evidence.
+                "intensity": code_name(INTENSITY_NAMES, lap.get(FIELD_LAP_INTENSITY), {255}),
+                "lap_trigger": code_name(LAP_TRIGGER_NAMES, lap.get(FIELD_LAP_TRIGGER), {255}),
+                "wkt_step_index": clean_number(lap.get(FIELD_LAP_WKT_STEP_INDEX), {65535}),
             }
         )
 
@@ -574,6 +637,8 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
             "sport": sport,
             "sub_sport": sub_sport,
             "garmin_activity_id": garmin_activity_id_from_name(filepath),
+            "workout_name": clean_text(parsed.workouts[0].get(8)) if parsed.workouts else None,
+            "workout_description": clean_text(parsed.workouts[0].get(17)) if parsed.workouts else None,
             "started_at_utc": to_iso8601(start_dt),
             "ended_at_utc": to_iso8601(end_dt),
             "start_time_local": start_local,
@@ -601,6 +666,7 @@ def canonicalize_fit(filepath, athlete_timezone="America/Chicago"):
         },
         "laps": lap_rows,
         "samples": sample_rows,
+        "workout_steps": [clean_workout_step(step) for step in parsed.workout_steps],
     }
 
 

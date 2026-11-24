@@ -123,6 +123,9 @@ CREATE TABLE IF NOT EXISTS activities (
     fit_distance_m REAL,
     fit_duration_seconds REAL,
     garmin_adjusted INTEGER,
+    workout_name TEXT,
+    workout_description TEXT,
+    lap_details_at TEXT,
     FOREIGN KEY (athlete_id) REFERENCES athletes(id),
     FOREIGN KEY (source_file_id) REFERENCES source_files(id)
 );
@@ -141,6 +144,9 @@ CREATE TABLE IF NOT EXISTS laps (
     max_heart_rate_bpm REAL,
     avg_cadence_spm REAL,
     lap_type TEXT,
+    intensity TEXT,
+    lap_trigger TEXT,
+    wkt_step_index INTEGER,
     created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE,
     UNIQUE(activity_id, lap_index)
@@ -331,5 +337,28 @@ CREATE TABLE IF NOT EXISTS wellness_fetch_log (
 
 INSERT OR IGNORE INTO schema_migrations(version)
 VALUES ('0005_garmin_ids_local_time_metrics');
+
+-- 0006: workout details. Laps keep Garmin's intensity, trigger, and step index as recorded.
+-- workout_steps holds the plan of a Garmin structured workout (the activity's workout_name and
+-- workout_description are on activities). New lap and activity columns are added by db_upgrade.py.
+CREATE TABLE IF NOT EXISTS workout_steps (
+    activity_id INTEGER NOT NULL,
+    step_index INTEGER NOT NULL,
+    name TEXT,
+    intensity TEXT,
+    duration_type TEXT,
+    duration_value REAL,
+    target_type TEXT,
+    target_value REAL,
+    target_low REAL,
+    target_high REAL,
+    repeat_from_step INTEGER,
+    repeat_count INTEGER,
+    PRIMARY KEY (activity_id, step_index),
+    FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE
+);
+
+INSERT OR IGNORE INTO schema_migrations(version)
+VALUES ('0006_workout_details');
 
 COMMIT;
