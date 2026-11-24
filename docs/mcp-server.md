@@ -57,6 +57,38 @@ Rules: dates are each activity's own local date, distances follow Garmin, `null`
 On 2026-11-23, the 7/14/28-day windows, all 8 weekly totals, and the 6 longest runs matched an
 independent calculation from Garmin's live activity list, with 0 mismatches. The recovery numbers (latest values and 7/28-day averages, HRV range and status) matched fresh Garmin records over 28 days, 10 of 10 groups. The tool returns about 14.5 KB (roughly 3,600 tokens), of which recovery is about 300.
 
+## `get_workout_details(activity_id)`
+
+Second read-only tool. Takes a `garmin_activity_id` (shown on every run in `get_training_context`) and returns how one run was executed: every lap exactly as Garmin recorded it (distance, time, pace, average and max heart rate, Garmin's intensity label, trigger), a structure summary, the Garmin workout plan if there was one, a distance check, heart-rate zone minutes, and what is missing.
+
+`get_training_context` stays compact: recent runs only get a one-line `structure.summary` when something notable was found (for example "7 x ~3:05 (0.45 mi) at ~6:50/mi with jogging recoveries ... - inferred from manual laps, not a Garmin workout").
+
+**Where structure comes from, and how it is labeled** (`structure.source`):
+
+- `garmin`: the file carries a Garmin workout name or plan, or laps labeled warm-up, cool-down, recovery or rest. Consecutive laps with the same label count as one segment, the way Garmin counts them. Planned steps are returned separately and untouched.
+- `inferred`: no Garmin structure, so the shape was guessed. Manual-lap intervals need 6 or more manual laps, 3 or more fast laps within 25 s/mi of each other, and fast and slow laps at least 60 s/mi apart. Progression, fade and steady runs come from 5 or more mile splits (20 s/mi first-third vs last-third difference). Summaries end with "inferred from ...". If the evidence is not enough, the kind is `manual_laps_unclear` or `plain_run` and no structure is invented.
+- Ordinary runs are 1-mile auto laps that Garmin labels "interval". That label alone is not treated as a workout.
+
+**Treadmill and calibration.** Lap and split distances are the device's raw numbers. Garmin's session distance can be calibrated and differ. Both are returned in `distance_check` (with the ratio), the run is flagged `lap_distances_unreliable`, and the summary says paces are approximate. Nothing is corrected silently.
+
+**Timer pauses.** Mile splits rebuilt from the per-second records use timer time and leave out gaps of 10 s or more.
+
+## Checked against real data (workout details)
+
+- Lap count equals Garmin's `lapCount` for 360 of 360 runs.
+- Garmin-defined workouts: interval and recovery counts equal Garmin's own split summary for 33 of 33 (the validator check). Nov 17 (manual laps) and the older Feb/Mar manual-lap workouts are inferred, and 3 of them differ from Garmin's summary by 0-1 reps or have no clear pattern; those say so in `evidence`.
+- Nov 17: 7 reps at 6:39-6:55/mi (3:01-3:14 each, HR 161-168), 6 recoveries of 1:27-7:47, total 10.21 mi, matching the FIT laps.
+- Nov 14: progression, miles 9:10 to 7:27/mi, HR 127 to 163.
+- 'Sprint' (3x3x0:15@4:25/mi): 9 reps of about 15 s, 8 recoveries, 7 planned steps.
+- Treadmill 2026-11-12: session 7.02 mi vs lap sum 6.25 mi, flagged.
+
+## Limits (workout details)
+
+- Garmin's per-lap workout-step index in the FIT file is always 0, so laps cannot be tied to individual planned steps; it is stored but not trusted.
+- Three older manual-lap workouts (Feb 11, Feb 26, Mar 12) have all laps labeled "interval"; Garmin's own summary shows more structure than the laps do. Their structure is unclear or approximate.
+- Heart rate on very short reps (15 s) is flagged as not meaningful.
+- Existing activities were filled with `python reprocess_workout_details.py` from archived FIT files (no downloads; safe to repeat; `--dry-run` available). New syncs fill the fields on import.
+
 ## Limits
 
 - Interval and threshold sessions are not classified yet (lap intensity is not parsed), so `quality_sessions` says so.

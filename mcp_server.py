@@ -25,6 +25,7 @@ from urllib.parse import urlparse
 os.chdir(Path(__file__).resolve().parent)
 
 import training_context as context  # noqa: E402
+import workout_structure  # noqa: E402
 
 SERVER_NAME = "corre-cortes"
 SERVER_VERSION = "0.1.0"
@@ -37,7 +38,8 @@ LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "[::1]"}
 INSTRUCTIONS = (
     "Read-only training data from the athlete's Garmin watch (Corre Cortes). Call get_training_context "
     "before recommending any workout. Check freshness.stale and the missing list first, and never invent "
-    "values listed as missing: say what is unknown instead."
+    "values listed as missing. To see how a run was executed (laps, reps, recoveries, splits), call "
+    "get_workout_details with its garmin_activity_id. Structure marked inferred is a guess from lap patterns."
 )
 
 TOOL = {
@@ -72,7 +74,30 @@ TOOL = {
 }
 
 
-# ---------- the tool ----------
+TOOL_DETAILS = {
+    "name": "get_workout_details",
+    "title": "Get workout details",
+    "description": (
+        "Use this when you need to see exactly how one run was executed: every lap, repetitions and recoveries, "
+        "heart rate per lap, mile splits, and Garmin's own workout plan when the run came from a structured "
+        "workout. Pass the garmin_activity_id from get_training_context. Read-only. Structure with source "
+        "'garmin' is Garmin's definition; source 'inferred' was worked out from lap patterns and can be wrong. "
+        "Check flags, distance_check and missing; null means unknown, not zero."
+    ),
+    "inputSchema": {
+        "type": "object",
+        "properties": {
+            "activity_id": {"type": "integer", "minimum": 1, "description": "The Garmin activity ID (garmin_activity_id)."}
+        },
+        "required": ["activity_id"],
+        "additionalProperties": False,
+    },
+    "outputSchema": {"type": "object", "required": ["activity", "structure", "laps", "distance_check", "missing"]},
+    "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
+}
+
+
+# ---------- the tools ----------
 
 def local_now():
     """(UTC now, the Mac's current local date, a label for its time zone)."""
@@ -98,7 +123,26 @@ def call_get_training_context(arguments):
         connection.close()
 
 
-TOOLS = {"get_training_context": call_get_training_context}
+def call_get_workout_details(arguments):
+    arguments = arguments or {}
+    unknown = set(arguments) - {"activity_id"}
+    if unknown:
+        raise ValueError(f"Unknown argument(s): {', '.join(sorted(unknown))}")
+    activity_id = arguments.get("activity_id")
+    if isinstance(activity_id, bool) or not isinstance(activity_id, int) or activity_id < 1:
+        raise ValueError("activity_id must be a positive integer: use a garmin_activity_id from get_training_context")
+    connection = context.open_read_only(DB_PATH)
+    try:
+        details = workout_structure.build_details(connection, activity_id, context.activity_summary)
+    finally:
+        connection.close()
+    if details is None:
+        raise ValueError(f"No activity with Garmin ID {activity_id} is in Corre Cortes. Use a garmin_activity_id from get_training_context.")
+    return details
+
+
+TOOLS = {"get_training_context": call_get_training_context, "get_workout_details": call_get_workout_details}
+TOOL_LIST = [TOOL, TOOL_DETAILS]
 
 
 # ---------- JSON-RPC / MCP ----------
@@ -128,7 +172,7 @@ def handle_message(message):
     if method == "ping":
         return {"jsonrpc": "2.0", "id": request_id, "result": {}}
     if method == "tools/list":
-        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": [TOOL]}}
+        return {"jsonrpc": "2.0", "id": request_id, "result": {"tools": TOOL_LIST}}
     if method == "tools/call":
         name = params.get("name")
         if name not in TOOLS:

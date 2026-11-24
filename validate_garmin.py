@@ -216,6 +216,44 @@ def check_activities(report, connection, rows, items):
     return by_id, mine
 
 
+def check_workout_details(report, connection, by_id):
+    """Lap counts and workout structure against what Garmin's own activity list says."""
+    import workout_structure
+    connection.row_factory = sqlite3.Row
+    runs = connection.execute("SELECT * FROM activities WHERE activity_type = 'running' AND garmin_activity_id IS NOT NULL").fetchall()
+    counted = wrong = 0
+    wrong_ids = []
+    for row in runs:
+        item = by_id.get(row["garmin_activity_id"])
+        stored = connection.execute("SELECT COUNT(*) FROM laps WHERE activity_id = ?", (row["id"],)).fetchone()[0]
+        if not item or not item.get("lapCount") or not stored:
+            continue
+        counted += 1
+        if stored != item["lapCount"]:
+            wrong += 1
+            wrong_ids.append(str(row["garmin_activity_id"]))
+    report.add("Lap counts match Garmin", not wrong, f"{counted - wrong} of {counted} runs have the same number of laps as Garmin's lapCount", wrong_ids[:20])
+
+    checked = agree = 0
+    differ = []
+    for row in runs:
+        item = by_id.get(row["garmin_activity_id"])
+        counts = workout_structure.garmin_split_counts(item)
+        if not counts or not (counts.get("recovery") or counts.get("warmup") or counts.get("cooldown")):
+            continue
+        out = workout_structure.analyze(dict(row), workout_structure.load_laps(connection, row["id"]), counts)
+        structure = out["structure"]
+        if structure["kind"] == "garmin_structured_workout":
+            checked += 1
+            roles = [seg["role"] for seg in structure["segments"]]
+            if roles.count("rep") == counts.get("rep", 0) and roles.count("recovery") == counts.get("recovery", 0):
+                agree += 1
+            else:
+                differ.append(str(row["garmin_activity_id"]))
+    report.add("Garmin-defined workout structure matches Garmin's split summary", not differ,
+               f"{agree} of {checked} Garmin-defined workouts have the same number of intervals and recoveries as Garmin's own summary", differ[:20], warn=True)
+
+
 def check_weekly_miles(report, rows, items, today):
     garmin_entries = [(i["startTimeLocal"][:10], i["distance"]) for i in items if i["activityType"]["typeKey"] in RUNNING_KEYS]
     db_entries = [(r["local_date"], r["distance_m"]) for r in rows if r["activity_type"] == "running" and r["local_date"]]
@@ -332,6 +370,7 @@ def main():
     items = fetch_all_garmin(client)
     rows = load_rows(connection)
     by_id, _mine = check_activities(report, connection, rows, items)
+    check_workout_details(report, connection, by_id)
     check_weekly_miles(report, rows, items, today)
     check_wellness(report, connection, client, not args.no_wellness_sample, today)
     check_spot_checks(report, client, rows, by_id)

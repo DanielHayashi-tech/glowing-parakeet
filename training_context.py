@@ -10,6 +10,8 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import workout_structure
+
 METERS_PER_MILE = 1609.344
 FEET_PER_METER = 3.28084
 STALE_AFTER_HOURS = 3          # the sync runs hourly; a couple of skipped hours is normal
@@ -85,9 +87,21 @@ def flags_for(row):
     return flags
 
 
-def activity_summary(row):
+def compact_activity(row):
+    """The few fields worth repeating for a long run or strength session; details are one call away."""
     pace_value, pace_text = pace_fields(row["distance_m"], row["duration_seconds"]) if is_run(row) else (None, None)
-    return {
+    entry = {"garmin_activity_id": row["garmin_activity_id"], "local_date": row["local_date"],
+             "type": row["garmin_type_key"] or row["activity_type"], "duration_minutes": minutes(row["duration_seconds"])}
+    if is_run(row):
+        entry.update({"distance_miles": miles(row["distance_m"]), "pace": pace_text,
+                      "avg_heart_rate_bpm": None if row["avg_heart_rate_bpm"] is None else round(row["avg_heart_rate_bpm"]),
+                      "flags": flags_for(row)})
+    return entry
+
+
+def activity_summary(row, structure=None):
+    pace_value, pace_text = pace_fields(row["distance_m"], row["duration_seconds"]) if is_run(row) else (None, None)
+    entry = {
         "garmin_activity_id": row["garmin_activity_id"],
         "local_date": row["local_date"],
         "local_start": row["start_time_local"],
@@ -105,6 +119,9 @@ def activity_summary(row):
         "garmin_training_load": None if row["training_load"] is None else round(row["training_load"], 1),
         "flags": flags_for(row),
     }
+    if structure is not None:
+        entry["structure"] = structure
+    return entry
 
 
 # ---------- aggregates ----------
@@ -189,7 +206,7 @@ def longest_run_each_week(rows, today):
         runs = [r for r in rows if is_run(r) and monday.isoformat() <= r["local_date"] <= sunday.isoformat()]
         if runs:
             longest = max(runs, key=lambda r: r["distance_m"] or 0)
-            entry = activity_summary(longest)
+            entry = compact_activity(longest)
             entry["week_start"] = monday.isoformat()
             result.append(entry)
     return result
@@ -383,7 +400,7 @@ def recovery_context(connection, local_today):
 # ---------- the tool's output ----------
 
 ACTIVITY_COLUMNS = """
-    garmin_activity_id, local_date, start_time_local, started_at_utc, activity_type, sub_sport, garmin_type_key,
+    id, workout_name, workout_description, garmin_activity_id, local_date, start_time_local, started_at_utc, activity_type, sub_sport, garmin_type_key,
     activity_name, distance_m, duration_seconds, avg_heart_rate_bpm, max_heart_rate_bpm, total_ascent_m,
     aerobic_training_effect, anaerobic_training_effect, training_load, hr_zone1_seconds, hr_zone2_seconds,
     hr_zone3_seconds, hr_zone4_seconds, hr_zone5_seconds, garmin_adjusted, lap_distance_adjusted
@@ -396,6 +413,21 @@ def open_read_only(db_path):
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA query_only = ON")
     return connection
+
+
+def recent_with_structure(connection, rows):
+    """Recent activities; each run carries a short structure summary where there is something to say.
+    Garmin-defined structure is labeled source=garmin, everything else source=inferred (or null)."""
+    entries = []
+    for row in rows:
+        structure = None
+        if is_run(row):
+            analysis = workout_structure.analyze(
+                row, workout_structure.load_laps(connection, row["id"]),
+                workout_structure.load_garmin_splits(connection, row["garmin_activity_id"]))
+            structure = workout_structure.compact_structure(analysis["structure"], row["distance_m"])
+        entries.append(activity_summary(row, structure))
+    return entries
 
 
 def build_context(connection, now, local_today, status, recent_limit=DEFAULT_RECENT, local_timezone="local"):
@@ -448,7 +480,7 @@ def build_context(connection, now, local_today, status, recent_limit=DEFAULT_REC
         "recent_long_runs": longest_run_each_week(rows, local_today),
         "quality_sessions": {"available": False, "reason": missing[0]},
         "recovery": recovery_context(connection, local_today),
-        "recent_strength_sessions": [activity_summary(r) for r in recent_strength],
-        "recent_activities": [activity_summary(r) for r in recent],
+        "recent_strength_sessions": [compact_activity(r) for r in recent_strength],
+        "recent_activities": recent_with_structure(connection, recent),
         "missing": missing,
     }

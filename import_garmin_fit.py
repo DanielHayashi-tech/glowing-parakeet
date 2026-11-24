@@ -277,9 +277,12 @@ def insert_activity(connection, athlete_id, source_file_id, activity):
             training_load,
             device_name,
             fit_distance_m,
-            fit_duration_seconds
+            fit_duration_seconds,
+            workout_name,
+            workout_description,
+            lap_details_at
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
         """,
         (
             athlete_id,
@@ -312,6 +315,8 @@ def insert_activity(connection, athlete_id, source_file_id, activity):
             activity["device_name"],
             activity["distance_m"],
             activity["duration_seconds"],
+            activity.get("workout_name"),
+            activity.get("workout_description"),
         ),
     )
     return cursor.lastrowid
@@ -332,9 +337,12 @@ def insert_laps(connection, activity_id, laps):
             avg_heart_rate_bpm,
             max_heart_rate_bpm,
             avg_cadence_spm,
-            lap_type
+            lap_type,
+            intensity,
+            lap_trigger,
+            wkt_step_index
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -350,8 +358,30 @@ def insert_laps(connection, activity_id, laps):
                 lap["max_heart_rate_bpm"],
                 lap["avg_cadence_spm"],
                 lap["lap_type"],
+                lap.get("intensity"),
+                lap.get("lap_trigger"),
+                lap.get("wkt_step_index"),
             )
             for lap in laps
+        ],
+    )
+
+
+def insert_workout_steps(connection, activity_id, steps):
+    connection.executemany(
+        """
+        INSERT OR REPLACE INTO workout_steps(
+            activity_id, step_index, name, intensity, duration_type, duration_value, target_type,
+            target_value, target_low, target_high, repeat_from_step, repeat_count
+        )
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (activity_id, step["step_index"], step["name"], step["intensity"], step["duration_type"],
+             step["duration_value"], step["target_type"], step["target_value"], step["target_low"],
+             step["target_high"], step["repeat_from_step"], step["repeat_count"])
+            for step in steps
+            if step.get("step_index") is not None
         ],
     )
 
@@ -643,6 +673,7 @@ def import_fit_file(
         }
     activity_id = insert_activity(connection, athlete_id, source_file_id, canonical["activity"])
     insert_laps(connection, activity_id, canonical["laps"])
+    insert_workout_steps(connection, activity_id, canonical.get("workout_steps", []))
     update_lap_check(connection, activity_id)
     insert_samples(connection, activity_id, canonical["samples"])
     mark_source_file(connection, source_file_id, "imported")

@@ -49,14 +49,16 @@ class ProtocolTests(unittest.TestCase):
 
 
 class ToolTests(unittest.TestCase):
-    def test_exactly_one_tool_and_it_is_marked_read_only(self):
+    def test_exactly_two_tools_and_both_are_marked_read_only(self):
         tools = server.handle_message(rpc("tools/list"))["result"]["tools"]
-        self.assertEqual([t["name"] for t in tools], ["get_training_context"])
-        annotations = tools[0]["annotations"]
-        self.assertTrue(annotations["readOnlyHint"])
-        self.assertFalse(annotations["destructiveHint"])
-        self.assertFalse(annotations["openWorldHint"])
-        self.assertFalse(tools[0]["inputSchema"]["additionalProperties"])
+        self.assertEqual([t["name"] for t in tools], ["get_training_context", "get_workout_details"])
+        for tool in tools:
+            annotations = tool["annotations"]
+            self.assertTrue(annotations["readOnlyHint"], tool["name"])
+            self.assertFalse(annotations["destructiveHint"], tool["name"])
+            self.assertFalse(annotations["openWorldHint"], tool["name"])
+            self.assertFalse(tool["inputSchema"]["additionalProperties"], tool["name"])
+        self.assertEqual(tools[1]["inputSchema"]["required"], ["activity_id"])
 
     def test_call_returns_structured_content_and_matching_text(self):
         result = server.handle_message(rpc("tools/call", {"name": "get_training_context", "arguments": {"recent_activities": 3}}))["result"]
@@ -88,6 +90,61 @@ class ToolTests(unittest.TestCase):
             server.DB_PATH = original
         self.assertTrue(result["isError"])
         self.assertEqual(result["content"][0]["text"], "The training data is temporarily unavailable.")
+
+
+def a_real_run_id():
+    """A Garmin activity ID with laps from the real database, or None if the database is not there."""
+    import sqlite3
+    try:
+        connection = sqlite3.connect("file:" + str(_path.ROOT / "data_hub.db") + "?mode=ro", uri=True)
+        row = connection.execute(
+            "SELECT a.garmin_activity_id FROM activities a WHERE a.activity_type = 'running' AND EXISTS "
+            "(SELECT 1 FROM laps l WHERE l.activity_id = a.id) ORDER BY a.started_at_utc DESC LIMIT 1").fetchone()
+        connection.close()
+        return row[0] if row else None
+    except sqlite3.Error:
+        return None
+
+
+class WorkoutDetailsToolTests(unittest.TestCase):
+    def call(self, arguments):
+        return server.handle_message(rpc("tools/call", {"name": "get_workout_details", "arguments": arguments}))["result"]
+
+    def test_instructions_mention_the_new_tool_and_stay_short(self):
+        self.assertIn("get_workout_details", server.INSTRUCTIONS)
+        self.assertLess(len(server.INSTRUCTIONS), 512)
+
+    def test_a_real_run_returns_laps_structure_and_checks(self):
+        activity_id = a_real_run_id()
+        if activity_id is None:
+            self.skipTest("no real database with laps")
+        result = self.call({"activity_id": activity_id})
+        self.assertFalse(result["isError"])
+        data = result["structuredContent"]
+        for key in server.TOOL_DETAILS["outputSchema"]["required"]:
+            self.assertIn(key, data)
+        self.assertTrue(data["laps"])
+        self.assertIn(data["structure"]["source"], ("garmin", "inferred", None))
+        self.assertEqual(json.loads(result["content"][0]["text"]), data)
+
+    def test_bad_arguments_are_readable_tool_errors(self):
+        for bad in ({}, {"activity_id": 0}, {"activity_id": -5}, {"activity_id": "abc"}, {"activity_id": True},
+                    {"activity_id": 1.5}, {"activity_id": 1, "extra": 2}):
+            result = self.call(bad)
+            self.assertTrue(result["isError"], bad)
+            self.assertIn("text", result["content"][0])
+
+    def test_unknown_activity_says_where_to_get_a_valid_id(self):
+        result = self.call({"activity_id": 999999999999})
+        self.assertTrue(result["isError"])
+        self.assertIn("garmin_activity_id from get_training_context", result["content"][0]["text"])
+
+    def test_the_tool_cannot_write(self):
+        import inspect
+        source = inspect.getsource(server.call_get_workout_details)
+        self.assertIn("open_read_only", source)
+        for word in ("INSERT", "UPDATE", "DELETE", "execute("):
+            self.assertNotIn(word, source)
 
 
 class StdioTests(unittest.TestCase):

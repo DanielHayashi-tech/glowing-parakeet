@@ -36,6 +36,18 @@ ACTIVITY_COLUMNS = {
     "fit_duration_seconds": "REAL",
     "garmin_adjusted": "INTEGER",
     "lap_distance_adjusted": "INTEGER",
+    # Garmin's structured-workout name and plain-language plan, when the FIT file carries one.
+    "workout_name": "TEXT",
+    "workout_description": "TEXT",
+    # When lap labels and the workout plan were read from the FIT file; NULL = not done yet.
+    "lap_details_at": "TEXT",
+}
+
+LAP_COLUMNS = {
+    # Garmin's own labels for each lap, as recorded.
+    "intensity": "TEXT",
+    "lap_trigger": "TEXT",
+    "wkt_step_index": "INTEGER",
 }
 
 LAP_MISMATCH_TOLERANCE = 0.01  # 1%
@@ -47,12 +59,13 @@ def existing_columns(connection, table):
 
 
 def add_missing_columns(connection):
-    present = existing_columns(connection, "activities")
     added = []
-    for name, sql_type in ACTIVITY_COLUMNS.items():
-        if name not in present:
-            connection.execute(f"ALTER TABLE activities ADD COLUMN {name} {sql_type}")
-            added.append(name)
+    for table, columns in (("activities", ACTIVITY_COLUMNS), ("laps", LAP_COLUMNS)):
+        present = existing_columns(connection, table)
+        for name, sql_type in columns.items():
+            if name not in present:
+                connection.execute(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+                added.append(name)
     return added
 
 
