@@ -113,6 +113,16 @@ python -m unittest discover -s tests -t .      # unit tests
 Details of what was fixed, the rules for where Garmin and the FIT file disagree, and known
 limitations are in `docs/milestone-1-garmin-pipeline.md`.
 
+## Local MCP Server (read-only)
+
+```bash
+python mcp_server.py               # stdio, for MCP Inspector
+python mcp_server.py --http 8765   # local only: http://127.0.0.1:8765/mcp
+```
+
+One tool, `get_training_context`, built from the validated database. It is not exposed to the
+internet. See `docs/mcp-server.md`.
+
 ## Pages
 
 - `/` dashboard

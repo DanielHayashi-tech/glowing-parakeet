@@ -34,6 +34,7 @@ os.chdir(Path(__file__).resolve().parent)
 
 import sync_garmin_api as garmin  # noqa: E402
 import sync_garmin_wellness as wellness  # noqa: E402
+from training_context import METERS_PER_MILE, monday_of, weekly_running_miles  # noqa: E402,F401  (shared with the MCP tool)
 
 DB_PATH = "data_hub.db"
 REPORT_DIR = Path("docs/reports")
@@ -45,14 +46,9 @@ HR_TOLERANCE_BPM = 1.0
 WEEKLY_MILE_TOLERANCE = 0.05
 WEEKS_TO_CHECK = 8
 STALE_AFTER_HOURS = 3
-METERS_PER_MILE = 1609.344
 
 
 # ---------- pure helpers (unit tested) ----------
-
-def monday_of(day):
-    return day - timedelta(days=day.weekday())
-
 
 def garmin_offset_minutes(item):
     local = datetime.strptime(item["startTimeLocal"], "%Y-%m-%d %H:%M:%S")
@@ -88,21 +84,6 @@ def compare_activity(row, item):
             if abs(row[column] - item[key]) > HR_TOLERANCE_BPM:
                 problems.append(name)
     return problems
-
-
-def weekly_running_miles(entries, weeks, today):
-    """{monday: miles} for the last `weeks` complete Monday-Sunday weeks.
-
-    entries are (local_date 'YYYY-MM-DD', meters) for running activities only.
-    """
-    last_complete_monday = monday_of(today) - timedelta(days=7)
-    mondays = [last_complete_monday - timedelta(days=7 * k) for k in range(weeks)]
-    totals = {monday: 0.0 for monday in mondays}
-    for local_date, meters in entries:
-        monday = monday_of(date.fromisoformat(local_date))
-        if monday in totals:
-            totals[monday] += (meters or 0) / METERS_PER_MILE
-    return totals
 
 
 def same_value(stored, fresh):
