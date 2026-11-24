@@ -246,6 +246,140 @@ def freshness(status, latest_row, now):
     }
 
 
+# ---------- recovery ----------
+
+SHORT_SLEEP_NIGHT_HOURS = 6.5
+VERY_SHORT_SLEEP_HOURS = 6.0
+HRV_TREND_DROP = 0.20          # 7-day average this far below the 28-day average
+RESTING_HR_RISE_BPM = 3        # latest resting HR this far above the 28-day average
+BODY_BATTERY_DROP = 25         # wake-up body battery this far below the 28-day average
+FLAG_RULES = (
+    "Simple rules on Garmin's own numbers, not a score or medical advice: HRV below Garmin's range; "
+    "7-day HRV average 20% or more under the 28-day average; resting HR 3+ bpm over its 28-day average; "
+    "last night under 6 h; 3+ nights under 6.5 h in the last 7; wake-up body battery 25+ under its 28-day average."
+)
+
+RECOVERY_COLUMNS = """
+    calendar_date, sleep_seconds, sleep_score, hrv_last_night_avg, hrv_status, hrv_balanced_low,
+    hrv_balanced_upper, resting_hr_bpm, body_battery_at_wake, avg_stress
+"""
+
+
+def mean(values, places=1):
+    present = [v for v in values if v is not None]
+    return round(sum(present) / len(present), places) if present else None
+
+
+def recovery_context(connection, local_today):
+    """Sleep, HRV, resting heart rate, body battery and stress: latest value plus 7 and 28 day averages.
+
+    Everything is Garmin's stored value. A day Garmin gave nothing for is missing (null), never zero.
+    Stress is a daily average that is still building today, so it only counts completed days.
+    """
+    first = (local_today - timedelta(days=27)).isoformat()
+    rows = [dict(r) for r in connection.execute(
+        f"SELECT {RECOVERY_COLUMNS} FROM wellness_daily WHERE calendar_date >= ? AND calendar_date <= ? ORDER BY calendar_date",
+        (first, local_today.isoformat()),
+    )]
+    if not rows:
+        return {"available": False, "reason": "No wellness data is stored for the last 28 days."}
+
+    today_text = local_today.isoformat()
+    seven_from = (local_today - timedelta(days=6)).isoformat()
+    last7 = [r for r in rows if r["calendar_date"] >= seven_from]
+    latest = rows[-1]
+    complete = [r for r in rows if r["calendar_date"] < today_text]       # stress only counts finished days
+    complete7 = [r for r in complete if r["calendar_date"] >= seven_from]
+
+    def hours(r):
+        return None if r["sleep_seconds"] is None else r["sleep_seconds"] / 3600
+
+    sleep7, sleep28 = [hours(r) for r in last7], [hours(r) for r in rows]
+    short_nights = sum(1 for h in sleep7 if h is not None and h < SHORT_SLEEP_NIGHT_HOURS)
+    hrv_low, hrv_high = latest["hrv_balanced_low"], latest["hrv_balanced_upper"]
+    last_complete = complete[-1] if complete else None
+
+    block = {
+        "data_through": latest["calendar_date"],
+        "sleep": {
+            "last_night_hours": None if hours(latest) is None else round(hours(latest), 2),
+            "last_night_score": latest["sleep_score"],
+            "avg_hours_7d": mean(sleep7, 2),
+            "avg_hours_28d": mean(sleep28, 2),
+            "avg_score_7d": mean([r["sleep_score"] for r in last7]),
+            "avg_score_28d": mean([r["sleep_score"] for r in rows]),
+            "nights_under_6_5h_of_last_7": short_nights,
+        },
+        "hrv": {
+            "last_night_ms": latest["hrv_last_night_avg"],
+            "avg_7d_ms": mean([r["hrv_last_night_avg"] for r in last7]),
+            "avg_28d_ms": mean([r["hrv_last_night_avg"] for r in rows]),
+            "garmin_balanced_range_ms": None if hrv_low is None or hrv_high is None else [hrv_low, hrv_high],
+            "garmin_status": latest["hrv_status"],
+        },
+        "resting_hr_bpm": {
+            "latest": latest["resting_hr_bpm"],
+            "avg_7d": mean([r["resting_hr_bpm"] for r in last7]),
+            "avg_28d": mean([r["resting_hr_bpm"] for r in rows]),
+        },
+        "body_battery_at_wake": {
+            "latest": latest["body_battery_at_wake"],
+            "avg_7d": mean([r["body_battery_at_wake"] for r in last7]),
+            "avg_28d": mean([r["body_battery_at_wake"] for r in rows]),
+        },
+        "stress_daily_avg_full_days": {
+            "latest": None if last_complete is None else last_complete["avg_stress"],
+            "latest_date": None if last_complete is None else last_complete["calendar_date"],
+            "avg_7d": mean([r["avg_stress"] for r in complete7]),
+            "avg_28d": mean([r["avg_stress"] for r in complete]),
+        },
+    }
+
+    def count(window, key):
+        return sum(1 for r in window if r[key] is not None)
+
+    block["days_with_data"] = {
+        "last_7_days": {"sleep": count(last7, "sleep_seconds"), "hrv": count(last7, "hrv_last_night_avg"),
+                        "resting_hr": count(last7, "resting_hr_bpm"), "body_battery": count(last7, "body_battery_at_wake"),
+                        "stress": count(complete7, "avg_stress")},
+        "last_28_days": {"sleep": count(rows, "sleep_seconds"), "hrv": count(rows, "hrv_last_night_avg"),
+                         "resting_hr": count(rows, "resting_hr_bpm"), "body_battery": count(rows, "body_battery_at_wake"),
+                         "stress": count(complete, "avg_stress")},
+    }
+
+    flags = []
+    hrv = block["hrv"]
+    if hrv["last_night_ms"] is not None and hrv_low is not None and hrv["last_night_ms"] < hrv_low:
+        flags.append({"flag": "hrv_below_garmin_range", "detail": f"{hrv['last_night_ms']} ms vs Garmin range {hrv_low}-{hrv_high}"})
+    if hrv["avg_7d_ms"] and hrv["avg_28d_ms"] and hrv["avg_7d_ms"] <= hrv["avg_28d_ms"] * (1 - HRV_TREND_DROP):
+        flags.append({"flag": "hrv_trending_down", "detail": f"7-day {hrv['avg_7d_ms']} vs 28-day {hrv['avg_28d_ms']} ms"})
+    rhr = block["resting_hr_bpm"]
+    if rhr["latest"] is not None and rhr["avg_28d"] is not None and rhr["latest"] >= rhr["avg_28d"] + RESTING_HR_RISE_BPM:
+        flags.append({"flag": "resting_hr_elevated", "detail": f"{rhr['latest']} bpm vs 28-day average {rhr['avg_28d']}"})
+    last_hours = hours(latest)
+    if last_hours is not None and last_hours < VERY_SHORT_SLEEP_HOURS:
+        flags.append({"flag": "short_sleep_last_night", "detail": f"{round(last_hours, 1)} h"})
+    if short_nights >= 3:
+        flags.append({"flag": "several_short_nights", "detail": f"{short_nights} of the last 7 nights under {SHORT_SLEEP_NIGHT_HOURS} h"})
+    battery = block["body_battery_at_wake"]
+    if battery["latest"] is not None and battery["avg_28d"] is not None and battery["latest"] <= battery["avg_28d"] - BODY_BATTERY_DROP:
+        flags.append({"flag": "low_body_battery_at_wake", "detail": f"{battery['latest']} vs 28-day average {battery['avg_28d']}"})
+    block["flags"] = flags
+    block["flag_rules"] = FLAG_RULES
+
+    notes = []
+    if latest["calendar_date"] != today_text:
+        notes.append(f"No recovery data for today yet; the latest is {latest['calendar_date']}.")
+    for label, value in (("Last night's sleep", latest["sleep_seconds"]), ("Last night's HRV", latest["hrv_last_night_avg"]),
+                         ("Today's resting heart rate", latest["resting_hr_bpm"]), ("Wake-up body battery", latest["body_battery_at_wake"])):
+        if value is None:
+            notes.append(f"{label} is missing from Garmin (not worn, not synced, or not recorded); it is not zero.")
+    if not flags:
+        notes.append("No flag rule triggered. That does not guarantee good recovery.")
+    block["notes"] = notes
+    return block
+
+
 # ---------- the tool's output ----------
 
 ACTIVITY_COLUMNS = """
@@ -291,7 +425,6 @@ def build_context(connection, now, local_today, status, recent_limit=DEFAULT_REC
 
     missing = [
         "Quality sessions (intervals, threshold, tempo) are not classified yet: lap intensity is not parsed, so none are reported.",
-        "Sleep, resting heart rate, HRV and body battery are not part of this tool.",
         "Garmin's training readiness, training status and recovery time are not available from the Garmin Personal API.",
     ]
     if undated:
@@ -314,6 +447,7 @@ def build_context(connection, now, local_today, status, recent_limit=DEFAULT_REC
         "weekly_mileage": weekly_breakdown(rows, local_today),
         "recent_long_runs": longest_run_each_week(rows, local_today),
         "quality_sessions": {"available": False, "reason": missing[0]},
+        "recovery": recovery_context(connection, local_today),
         "recent_strength_sessions": [activity_summary(r) for r in recent_strength],
         "recent_activities": [activity_summary(r) for r in recent],
         "missing": missing,

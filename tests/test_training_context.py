@@ -208,6 +208,130 @@ class FreshnessTests(unittest.TestCase):
         self.assertEqual(context(db, fresh_status())["freshness"]["latest_activity"]["hours_ago"], 6.0)
 
 
+def wellness(connection, day, **fields):
+    row = {"athlete_id": 1, "calendar_date": day}
+    row.update(fields)
+    connection.execute(f"INSERT INTO wellness_daily({', '.join(row)}) VALUES ({', '.join('?' * len(row))})", list(row.values()))
+
+
+def fill_wellness(connection, days=28, end=TODAY, **defaults):
+    """One row per day, oldest first, ending on `end`. Per-day overrides: pass callables via `by_day`."""
+    for offset in range(days - 1, -1, -1):
+        day = (end - timedelta(days=offset)).isoformat()
+        wellness(connection, day, **defaults)
+
+
+class RecoveryTests(unittest.TestCase):
+    NORMAL = {"sleep_seconds": 7.5 * 3600, "sleep_score": 80, "hrv_last_night_avg": 80, "hrv_balanced_low": 63,
+              "hrv_balanced_upper": 110, "hrv_status": "BALANCED", "resting_hr_bpm": 42, "body_battery_at_wake": 85, "avg_stress": 25}
+
+    def recovery(self, connection):
+        return context(connection, fresh_status())["recovery"]
+
+    def test_latest_values_and_seven_versus_twenty_eight_day_averages(self):
+        db = database()
+        # 21 older days of 7 h sleep / HRV 70 / resting HR 44, then a better last week
+        for offset in range(27, 6, -1):
+            wellness(db, (TODAY - timedelta(days=offset)).isoformat(), **dict(self.NORMAL, sleep_seconds=7 * 3600, hrv_last_night_avg=70, resting_hr_bpm=44))
+        for offset in range(6, -1, -1):
+            wellness(db, (TODAY - timedelta(days=offset)).isoformat(), **dict(self.NORMAL, sleep_seconds=8 * 3600, hrv_last_night_avg=90, resting_hr_bpm=38))
+        r = self.recovery(db)
+        self.assertEqual(r["data_through"], TODAY.isoformat())
+        self.assertEqual((r["sleep"]["last_night_hours"], r["sleep"]["avg_hours_7d"], r["sleep"]["avg_hours_28d"]), (8.0, 8.0, 7.25))
+        self.assertEqual((r["hrv"]["last_night_ms"], r["hrv"]["avg_7d_ms"], r["hrv"]["avg_28d_ms"]), (90, 90.0, 75.0))
+        self.assertEqual((r["resting_hr_bpm"]["latest"], r["resting_hr_bpm"]["avg_7d"], r["resting_hr_bpm"]["avg_28d"]), (38, 38.0, 42.5))
+        self.assertEqual(r["hrv"]["garmin_balanced_range_ms"], [63, 110])
+        self.assertEqual(r["hrv"]["garmin_status"], "BALANCED")
+
+    def test_a_normal_stretch_raises_no_flags_and_says_so_carefully(self):
+        db = database()
+        fill_wellness(db, **self.NORMAL)
+        r = self.recovery(db)
+        self.assertEqual(r["flags"], [])
+        self.assertTrue(any("does not guarantee" in n for n in r["notes"]))
+
+    def test_each_flag_rule_fires_on_its_own_threshold(self):
+        db = database()
+        fill_wellness(db, days=27, end=TODAY - timedelta(days=1), **self.NORMAL)
+        # today: HRV under Garmin's range, resting HR +4, 5.5 h of sleep, body battery 30
+        wellness(db, TODAY.isoformat(), **dict(self.NORMAL, hrv_last_night_avg=55, resting_hr_bpm=46, sleep_seconds=5.5 * 3600, body_battery_at_wake=30))
+        names = {f["flag"] for f in self.recovery(db)["flags"]}
+        self.assertEqual(names, {"hrv_below_garmin_range", "resting_hr_elevated", "short_sleep_last_night", "low_body_battery_at_wake"})
+
+    def test_flags_stay_quiet_just_inside_the_thresholds(self):
+        db = database()
+        fill_wellness(db, days=27, end=TODAY - timedelta(days=1), **self.NORMAL)
+        # resting HR 2 above average (rule is 3), sleep exactly 6 h (rule is under 6), HRV at the range floor
+        wellness(db, TODAY.isoformat(), **dict(self.NORMAL, resting_hr_bpm=44, sleep_seconds=6 * 3600, hrv_last_night_avg=63, body_battery_at_wake=70))
+        self.assertEqual(self.recovery(db)["flags"], [])
+
+    def test_three_short_nights_and_a_falling_hrv_trend(self):
+        db = database()
+        for offset in range(27, 6, -1):
+            wellness(db, (TODAY - timedelta(days=offset)).isoformat(), **dict(self.NORMAL, hrv_last_night_avg=90))
+        for offset in range(6, -1, -1):
+            short = offset in (1, 3, 5)
+            wellness(db, (TODAY - timedelta(days=offset)).isoformat(), **dict(self.NORMAL, hrv_last_night_avg=60, sleep_seconds=(6.2 if short else 7.5) * 3600))
+        r = self.recovery(db)
+        names = {f["flag"] for f in r["flags"]}
+        self.assertIn("several_short_nights", names)
+        self.assertIn("hrv_trending_down", names)       # 7-day average 60 vs 28-day 82.5
+        self.assertEqual(r["sleep"]["nights_under_6_5h_of_last_7"], 3)
+
+    def test_missing_values_are_null_with_a_note_never_zero(self):
+        db = database()
+        fill_wellness(db, days=27, end=TODAY - timedelta(days=1), **self.NORMAL)
+        wellness(db, TODAY.isoformat(), sleep_seconds=None, hrv_last_night_avg=None, resting_hr_bpm=41, body_battery_at_wake=None)
+        r = self.recovery(db)
+        self.assertIsNone(r["sleep"]["last_night_hours"])
+        self.assertIsNone(r["hrv"]["last_night_ms"])
+        self.assertEqual(r["resting_hr_bpm"]["latest"], 41)
+        self.assertEqual(r["days_with_data"]["last_28_days"]["sleep"], 27)       # the missing night is not counted as zero
+        self.assertEqual(r["days_with_data"]["last_7_days"]["hrv"], 6)
+        self.assertAlmostEqual(r["sleep"]["avg_hours_28d"], 7.5)                  # averaged over nights that exist
+        joined = " ".join(r["notes"])
+        self.assertIn("Last night's sleep is missing", joined)
+        self.assertIn("not zero", joined)
+        self.assertNotIn("hrv_below_garmin_range", {f["flag"] for f in r["flags"]})   # no value, no flag
+
+    def test_today_not_yet_synced_reports_the_latest_day_it_has(self):
+        db = database()
+        fill_wellness(db, days=28, end=TODAY - timedelta(days=1), **self.NORMAL)
+        r = self.recovery(db)
+        self.assertEqual(r["data_through"], (TODAY - timedelta(days=1)).isoformat())
+        self.assertTrue(any("No recovery data for today yet" in n for n in r["notes"]))
+
+    def test_stress_ignores_the_unfinished_day(self):
+        db = database()
+        fill_wellness(db, days=27, end=TODAY - timedelta(days=1), **dict(self.NORMAL, avg_stress=20))
+        wellness(db, TODAY.isoformat(), **dict(self.NORMAL, avg_stress=99))        # today's average is still forming
+        stress = self.recovery(db)["stress_daily_avg_full_days"]
+        self.assertEqual((stress["latest"], stress["latest_date"], stress["avg_7d"], stress["avg_28d"]), (20, (TODAY - timedelta(days=1)).isoformat(), 20.0, 20.0))
+
+    def test_no_wellness_data_says_so(self):
+        r = self.recovery(database())
+        self.assertFalse(r["available"])
+        self.assertIn("No wellness data", r["reason"])
+
+    def test_stays_compact_even_with_every_flag_firing(self):
+        db = database()
+        fill_wellness(db, days=27, end=TODAY - timedelta(days=1), **self.NORMAL)
+        wellness(db, TODAY.isoformat(), **dict(self.NORMAL, hrv_last_night_avg=40, resting_hr_bpm=50, sleep_seconds=5 * 3600, body_battery_at_wake=20))
+        import json
+        size = len(json.dumps(self.recovery(db), separators=(",", ":")))
+        self.assertLess(size, 2000, f"recovery block is {size} bytes, about {size // 4} tokens")
+
+    def test_recovery_is_part_of_the_full_context_and_training_sections_are_unchanged(self):
+        db = database()
+        fill_wellness(db, **self.NORMAL)
+        add(db, "2026-11-25", miles=5, minutes=45)
+        out = context(db, fresh_status())
+        for key in ("recovery", "training_load", "weekly_mileage", "recent_long_runs", "recent_activities", "freshness", "missing"):
+            self.assertIn(key, out)
+        self.assertEqual(out["training_load"]["windows"]["last_7_days"]["running"]["miles"], 5.0)
+        self.assertFalse(any("Sleep, resting heart rate" in m for m in out["missing"]))     # no longer "missing"
+
+
 class ReadOnlyTests(unittest.TestCase):
     def test_the_database_connection_cannot_write(self):
         import os, tempfile

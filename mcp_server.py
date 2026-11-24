@@ -46,7 +46,8 @@ TOOL = {
     "description": (
         "Use this before recommending or reviewing any run or workout. Returns the athlete's recent training from "
         "Garmin: 7, 14 and 28 day training load, weekly mileage (Monday to Sunday), the longest run of each recent "
-        "week, strength sessions, recent activities, and when Garmin data last synced. Read-only. Always check "
+        "week, recovery (sleep, HRV, resting heart rate, body battery, stress with 7 and 28 day trends and simple flags), "
+        "strength sessions, recent activities, and when Garmin data last synced. Read-only. Always check "
         "freshness.stale and the missing list; null means unknown, not zero."
     ),
     "inputSchema": {
@@ -65,7 +66,7 @@ TOOL = {
     "outputSchema": {
         "type": "object",
         "required": ["as_of", "units", "freshness", "training_load", "weekly_mileage", "recent_long_runs",
-                     "quality_sessions", "recent_strength_sessions", "recent_activities", "missing"],
+                     "quality_sessions", "recovery", "recent_strength_sessions", "recent_activities", "missing"],
     },
     "annotations": {"readOnlyHint": True, "destructiveHint": False, "idempotentHint": True, "openWorldHint": False},
 }
