@@ -349,6 +349,20 @@ def infer_manual_intervals(laps):
     return {"reps": reps, "recoveries": recoveries, "block": block, "evidence": evidence, "typical": typical}, None
 
 
+def repetition_list(laps, rep_numbers, recovery_numbers):
+    """Each repetition with the recovery lap that follows it, as Garmin recorded the laps (inferred roles)."""
+    by_number = {l["n"]: l for l in laps}
+    result = []
+    for number in sorted(rep_numbers):
+        lap = lap_view(by_number[number])
+        after = by_number.get(number + 1)
+        recovery = lap_view(after) if after and after["n"] in recovery_numbers else None
+        def brief(view):
+            return {key: view[key] for key in ("n", "time", "miles", "pace", "avg_hr", "max_hr")}
+        result.append({"rep": len(result) + 1, **brief(lap), "recovery_after": brief(recovery) if recovery else None})
+    return result
+
+
 def inferred_interval_structure(laps, found, garmin_splits=None):
     rep_numbers = {l["n"] for l in found["reps"]}
     recovery_numbers = {l["n"] for l in found["recoveries"]}
@@ -388,6 +402,7 @@ def inferred_interval_structure(laps, found, garmin_splits=None):
         "summary": text,
         "evidence": evidence,
         "reps": stats,
+        "repetitions": repetition_list(laps, rep_numbers, recovery_numbers),
         "flags": flags,
     }
 

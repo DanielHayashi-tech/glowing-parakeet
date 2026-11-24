@@ -50,7 +50,8 @@ TOOL = {
         "Garmin: 7, 14 and 28 day training load, weekly mileage (Monday to Sunday), the longest run of each recent "
         "week, recovery (sleep, HRV, resting heart rate, body battery, stress with 7 and 28 day trends and simple flags), "
         "strength sessions, recent activities, and when Garmin data last synced. Read-only. Always check "
-        "freshness.stale and the missing list; null means unknown, not zero."
+        "freshness.stale and the missing list; null means unknown, not zero. Workout summaries here are aggregates "
+        "only: for the individual repetitions, recoveries, laps or heart rate of a run, call get_workout_details."
     ),
     "inputSchema": {
         "type": "object",
@@ -78,9 +79,10 @@ TOOL_DETAILS = {
     "name": "get_workout_details",
     "title": "Get workout details",
     "description": (
-        "Use this when you need to see exactly how one run was executed: every lap, repetitions and recoveries, "
-        "heart rate per lap, mile splits, and Garmin's own workout plan when the run came from a structured "
-        "workout. Pass the garmin_activity_id from get_training_context. Read-only. Structure with source "
+        "Use this whenever you need per-repetition detail for one run, or the summary in get_training_context is not "
+        "enough: each repetition with its time, pace, heart rate and the recovery that follows (structure.repetitions), "
+        "every lap with role and heart rate (laps), mile splits, and Garmin's own workout plan when the run came "
+        "from a structured workout. Pass the garmin_activity_id from get_training_context. Read-only. Structure with source "
         "'garmin' is Garmin's definition; source 'inferred' was worked out from lap patterns and can be wrong. "
         "Check flags, distance_check and missing; null means unknown, not zero."
     ),
